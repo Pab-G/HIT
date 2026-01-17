@@ -214,3 +214,7 @@ output/
 wandb/
 pretrained/
 hit/external/
+
+#Additions
+mri_bones_release_v2/
+body_models/
