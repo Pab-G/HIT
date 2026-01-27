@@ -1,6 +1,7 @@
 import torch
-from torch import einsum
 import torch.nn.functional as F
+from torch import einsum
+
 from hit.model.broyden import broyden
 from hit.model.helpers import expand_cond, mask_dict
 from hit.model.network import ImplicitNetwork
@@ -26,7 +27,6 @@ class ForwardDeformer(torch.nn.Module):
         self.lbs_network = ImplicitNetwork(**lbs_network_conf)
 
         self.disp_network = ImplicitNetwork(**beta_network_conf)
-        
         if compressor_conf is not None:
             self.compressor = ImplicitNetwork(**compressor_conf)
         else:

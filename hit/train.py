@@ -58,6 +58,22 @@ class HITTraining(pl.LightningModule):
         self.hit = HITModel(train_cfg=self.cfg.train_cfg, smpl=self.smpl)
         self.hit.initialize(pretrained=False, train_cfg=self.hit.train_cfg)
 
+        init_ckpt_path = getattr(cfg, "init_ckpt_path", None)
+        if init_ckpt_path:
+            print(f"Loading partial weights from {init_ckpt_path}")
+            checkpoint = torch.load(init_ckpt_path, map_location="cpu")
+            state_dict = checkpoint.get("state_dict", checkpoint)
+            filtered_state = {
+                k: v for k, v in state_dict.items() if not k.startswith("tissues_occ.")
+            }
+            missing, unexpected = self.hit.load_state_dict(
+                filtered_state, strict=False
+            )
+            if missing:
+                print(f"Missing keys (expected): {len(missing)}")
+            if unexpected:
+                print(f"Unexpected keys (ignored): {len(unexpected)}")
+        
         self.max_queries = self.train_cfg[
             "max_queries"
         ]  # to prevent OOM at inference time
@@ -612,7 +628,50 @@ class HITTraining(pl.LightningModule):
         part_id = []
         # for pts in torch.split(points, self.max_queries//batch_size, dim=1):
         #
-        output = self.forward(batch, points, eval_mode=True, use_part_id=True)
+        output = self.forward(batch, points, eval_mode=True, use_part_id=True)# Part ID
+        
+        
+        # --- 3D CANONICAL CHECK START ---
+        # # 1. Grab points and labels
+        # pts_c = output["pts_c"][0].detach().cpu().numpy()  # [N, 3]
+        # labels = gt_occ[0].detach().cpu().numpy()         # [N]
+
+        # # 2. Create a simple PLY header
+        # header = f"""ply
+        # format ascii 1.0
+        # element vertex {len(pts_c)}
+        # property float y
+        # property float x
+        # property float z
+        # property uchar red
+        # property uchar green
+        # property uchar blue
+        # end_header
+        # """
+
+        # # 3. Assign colors based on Bone ID (so you can see if bones are mixed)
+        # # Using a simple color map for IDs 3, 4, 5, 6, 7
+        # colors = {
+        #     3: [255, 0, 0],    # Red
+        #     4: [0, 255, 0],    # Green
+        #     5: [0, 0, 255],    # Blue
+        #     6: [255, 255, 0],  # Yellow
+        #     7: [255, 0, 255]   # Magenta
+        # }
+        # # Only save points within a reasonable 3D box (e.g., 3 meters)
+        # mask = np.all(np.abs(pts_c) < 3.0, axis=1)
+        # pts_c = pts_c[mask]
+        # labels = labels[mask]
+        # with open("canonical_skeleton.ply", "w") as f:
+        #     f.write(header)
+        #     for i in range(len(pts_c)):
+        #         p = pts_c[i]
+        #         c = colors.get(int(labels[i]), [200, 200, 200]) # Default gray
+        #         f.write(f"{p[0]} {p[1]} {p[2]} {c[0]} {c[1]} {c[2]}\n")
+
+        # print("Successfully saved canonical_skeleton.ply")
+        # --- CANONICAL CHECK CODE END ---
+        
         occ = output["pred_occ"]
         pred_occ.append(occ)
 
@@ -622,10 +681,20 @@ class HITTraining(pl.LightningModule):
             pred = torch.argmax(pred_occ, -1)
         else:
             pred = pred_occ > 0.5
+            
+        mapping = {3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
+        inv = {v: k for k, v in mapping.items()}  # 0->3, 1->4, ...
+
+        # pred: [B, N] with values in {0..4}
+        lut = torch.full((5,), -1, device=pred.device, dtype=pred.dtype)
+        for k, v in inv.items():
+            lut[k] = v
+
+        pred_mapped = lut[pred]  # 0->3, 1->4, 2->5, 3->6, 4->7
         part_id = batch["part_id"]
 
         val_loss_dict = metrics.validation_eval(
-            self.cfg, pred, gt_occ, part_id, body_mask
+            self.cfg, pred_mapped, gt_occ, part_id, body_mask
         )
 
         return val_loss_dict
@@ -1099,7 +1168,6 @@ def main(cfg):
 
     trainer = pl.Trainer(
         **cfg.trainer,
-        overfit_batches=1,
         callbacks=[checkpoint_callback, pl.callbacks.TQDMProgressBar(refresh_rate=10)],
         logger=logger,
     )

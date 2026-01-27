@@ -1,12 +1,12 @@
 import os
 
-import utils.figures
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import tqdm
-from utils.video import make_gif, make_video
+import utils.figures
 from skimage.io import imsave
+from utils.video import make_gif, make_video
+
 from hit.training.dataloader_mri import MRI_SHAPE
 
 
@@ -424,24 +424,6 @@ def validation_eval(cfg, pred_label, gt_label, part_id, body_mask):
     # todo restore
     # part_dice_dict = compute_part_dice(data_cfg, pred_label, gt_label, part_id, body_mask)
     # val_loss_dict.update(part_dice_dict)
-    for li, mri_label in enumerate(cfg.train_cfg['mri_labels']):
-        tissue_pred = pred_label==li
-        tissue_gt = gt_label==li
-        
-        if mri_label == 'NO':    
-            tissue_pred = torch.logical_and(tissue_pred, body_mask)
-            tissue_gt = torch.logical_and(tissue_gt, body_mask)        
-        
-        val_loss_dict[f"dice_{mri_label}"] = compute_dice(tissue_pred, tissue_gt)
-        # Add per part per tissue
-        from utils.smpl_utils import new_part_dict_kin_tree
-        for body_part in new_part_dict_kin_tree:
-            # TODO: no possibility for batching ?
-            val_loss_dict[f"dice_{mri_label}_{body_part}_part"] = 0
-            for b in range(tissue_pred.shape[0]):
-                val_loss_dict[f"dice_{mri_label}_{body_part}_part"] += compute_dice(tissue_pred[b,tissue_gt[b].nonzero()], 
-                                                                                    tissue_gt[b,tissue_gt[b].nonzero()])
-    
     val_loss_dict["accuracy"] = compute_accuracy(pred_label, gt_label)
     return val_loss_dict
 

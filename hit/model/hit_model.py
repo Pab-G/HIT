@@ -6,18 +6,17 @@ import torch.nn.functional as F
 import trimesh
 from skimage import measure
 
+from hit.model.deformer import ForwardDeformer, skinning
+from hit.model.generator import Generator
+from hit.model.helpers import expand_cond
+from hit.model.network import ImplicitNetwork
+from hit.training.mri_sampling_utils import load_occupancy
 from hit.utils.extract_pretrained_gdna import get_state_dict
+from hit.utils.figures import tissue_palette
 from hit.utils.metrics import occ2sdf
 from hit.utils.slice_extractor import SliceLevelSet
 from hit.utils.smpl_utils import get_skinning_weights, weights2colors, x_pose_like
 from hit.utils.tensors import cond_create
-from hit.utils.figures import tissue_palette
-
-from hit.model.deformer import ForwardDeformer, skinning
-from hit.model.helpers import expand_cond
-from hit.model.network import ImplicitNetwork
-from hit.model.generator import Generator
-from hit.training.mri_sampling_utils import load_occupancy
 
 
 class HITModel(torch.nn.Module):
@@ -333,7 +332,7 @@ class HITModel(torch.nn.Module):
             pts_c2 = pts_c 
   
         else:
-            assert not skinning_weights is None, "Skinning weights are required now for unposing. Edit code if you want to find multiple roots"
+            assert skinning_weights is not None, "Skinning weights are required now for unposing. Edit code if you want to find multiple roots"
 
             pts_c, others = self.deformer.forward(pts_d,
                                             {'betas': cond['betas'],

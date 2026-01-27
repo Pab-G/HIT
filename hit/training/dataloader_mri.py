@@ -308,7 +308,8 @@ class MRIDataset(torch.utils.data.Dataset):
         for pi, path in tqdm(enumerate(paths)):
             pkl_path = os.path.join(path, "mri_smpl.pkl")
             if not os.path.exists(pkl_path):
-                continue
+                print(f"Warning: {pkl_path} does not exist, exiting...")
+                exit(1)
 
             with open(pkl_path, "rb") as f:
                 raw_data = pkl.load(f)
@@ -346,7 +347,6 @@ class MRIDataset(torch.utils.data.Dataset):
                     surface_samples = pts[idx]
 
                     # --- BLUE JITTER LOGIC ---
-                    # Adds 8mm standard deviation noise to simulate internal volume
                     jitter = np.random.normal(0, 0.008, (requested_size, 3))
                     volumetric_pts = surface_samples + jitter
 
@@ -354,13 +354,15 @@ class MRIDataset(torch.utils.data.Dataset):
                     gt_occ.append(np.full(requested_size, class_id))
 
             if len(mri_points) == 0:
+                print(f"Warning: No bone points found for {path}, exiting...")
+                exit(1)
                 continue
-
+            
             # --- PREPARING PACKED DATA ---
             mri_pts_all = np.concatenate(mri_points, axis=0).astype(np.float32)
             occ_labels_all = np.concatenate(gt_occ, axis=0).astype(np.float32)
 
-            #
+            #from IPython import embed; embed(); exit(1)
             # Create SMPL mesh to calculate internal skinning weights
             smpl_out = smpl_tool(
                 betas=torch.tensor(raw_data["betas"][:10]).unsqueeze(0),
@@ -370,14 +372,15 @@ class MRIDataset(torch.utils.data.Dataset):
             )
 
             # Calculate weights (Maps every 3D point to its nearest SMPL skeleton joints)
-            weights, _ = get_skinning_weights(
+            # here we might have to set part_id:
+            weights, part_id = get_skinning_weights(
                 mri_pts_all, smpl_out.vertices[0].cpu().numpy(), smpl_tool
             )
-
             # Pack into the 33-column tensor HIT expects
             packed = np.zeros((mri_pts_all.shape[0], 33), dtype=np.float32)
             packed[:, 0:3] = mri_pts_all
             packed[:, 6] = occ_labels_all
+            packed[:, 7] = part_id
             packed[:, 8] = (
                 1.0  # body_mask (tells model these points are inside the body)
             )
@@ -402,6 +405,11 @@ class MRIDataset(torch.utils.data.Dataset):
                 data_stacked[key] = val
 
         print(f"--- SUCCESS: Loaded {len(dataset_list['seq_names'])} subjects ---")
+        
+        #bone_min, bone_max = mri_pts_all.min(0), mri_pts_all.max(0)
+        #body_min, body_max = smpl_out.vertices[0].min(0), smpl_out.vertices[0].max(0)
+        #print(f"Bone Bounding Box: {bone_min} to {bone_max}")
+        #print(f"Body Bounding Box: {body_min} to {body_max}")
         return cls(smpl_cfg, data_cfg, train_cfg, data_stacked, split)
 
     @torch.no_grad()
