@@ -15,26 +15,29 @@ from hit.utils.slice_extractor import SliceLevelSet
 
 
 def compute_occupancy_loss(hit_pl, batch, pred_occ):
-    # Only calculate weights for classes 3 through 7
-    bone_labels = [3, 4, 5, 6, 7]
+    """Compute occupancy loss for bone specialist model.
+    Labels: 0=NO (background), 1=Femur, 2=Pelvis, 3=Humerus, 4=Radius-Ulna, 5=Tibia-Fibula
+    """
+    num_classes = len(hit_pl.train_cfg.mri_labels)  # Should be 6 (NO + 5 bones)
+    
+    # Calculate class weights - inverse frequency weighting
     w_list = []
-
-    # We only count points that are actually in our bone set
-    total_bone_pts = torch.sum((batch["mri_occ"] >= 3) & (batch["mri_occ"] <= 7))
-
-    for ci in bone_labels:
-        # If a bone is small (like Radius), give it a higher weight
+    total_pts = batch["mri_occ"].numel()
+    
+    for ci in range(num_classes):
         count = torch.sum(batch["mri_occ"] == float(ci))
-        wi = 1 - (count / total_bone_pts) if total_bone_pts > 0 else 1.0
+        # Inverse frequency weighting, with smoothing to avoid division by zero
+        wi = total_pts / (num_classes * count + 1)
         w_list.append(wi)
 
-    weight = torch.tensor(w_list).to(pred_occ.device)
+    weight = torch.tensor(w_list, dtype=torch.float32).to(pred_occ.device)
+    # Normalize weights
+    weight = weight / weight.sum() * num_classes
 
-    # CrossEntropy focusing only on the 5 Bone Channels
-    # Note: pred_occ should now be size [B, N, 5] if you pruned the network
+    # CrossEntropy for all classes (0-5)
     occ_loss = F.cross_entropy(
-        input=pred_occ.reshape(-1, 5),
-        target=(batch["mri_occ"] - 3).long().reshape(-1),  # Shift 3-7 to 0-4
+        input=pred_occ.reshape(-1, num_classes),
+        target=batch["mri_occ"].long().reshape(-1),  # Labels are already 0-5
         weight=weight,
     )
 

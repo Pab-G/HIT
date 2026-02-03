@@ -462,9 +462,9 @@ class HITTraining(pl.LightningModule):
         # Accuracy
         y = batch["mri_occ"].long()
         if len(self.train_cfg.mri_labels) > 1:
-            y_shifted = y - 3
+            # Labels are now 0-5 (NO + 5 bones), no shift needed
             pred = torch.argmax(pred_occ, -1)
-            accuracy = torch.sum(pred == y_shifted).float() / n_points
+            accuracy = torch.sum(pred == y).float() / n_points
         else:
             pred = pred_occ > 0.5
             accuracy = torch.sum(pred == 1) / n_points

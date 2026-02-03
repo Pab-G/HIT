@@ -102,7 +102,7 @@ class HITModel(torch.nn.Module):
                     self.deformer.compressor.load_state_dict(get_state_dict(to_extract='deformer.compressor', source=f'pretrained_compressor_{gender}')) # undo beta
             
 
-    def forward_rigged(self, betas, body_pose=None, global_orient=None, transl=None, do_compress=False, mise_resolution0=32, mise_depth=3, **kwargs):
+    def forward_rigged(self,  betas, body_pose=None, global_orient=None, transl=None, do_compress=False, mise_resolution0=32, mise_depth=3, **kwargs):
         
         # smpl shaped in xpose
         # smpl = MySmpl(model_path=cg.smplx_models_path, modelgender=self.smpl.gender, device=betas.device)
@@ -130,6 +130,175 @@ class HITModel(torch.nn.Module):
                 mesh_p_list.append(mesh_p)
                 mesh_c_list.append(mesh_s)
         return mesh_p_list, mesh_c_list
+    
+    def forward_rigged_bones(self, specialist, betas, body_pose=None, global_orient=None, transl=None, do_compress=False, mise_resolution0=32, mise_depth=3, **kwargs):
+        """Extract individual bone meshes using a two-stage approach:
+        1. Standard HIT model identifies bone tissue (BT) regions
+        2. Specialist model classifies which specific bone within BT regions
+        
+        Uses marching cubes on a 3D grid where:
+        - Points outside BT get value 0 (not bone)
+        - Points inside BT get specialist's probability for each bone class
+        """
+        from skimage import measure
+
+        from hit.utils.smpl_utils import get_skinning_weights
+        
+        smpl = self.smpl
+        device = betas.device
+        
+        # Get SMPL in canonical X-pose (for mesh extraction)
+        smpl_output_xpose = smpl.forward(betas=betas, body_pose=smpl.x_cano().to(device), global_orient=None, transl=None)
+        
+        # Get SMPL in target pose (for final posing)
+        smpl_output = smpl.forward(betas=betas, body_pose=body_pose, global_orient=global_orient, transl=transl)
+        
+        # --- Stage 1: Get BT occupancy on a grid from standard model ---
+        print("Stage 1: Querying standard HIT model for bone tissue regions...")
+        
+        # Get bounding box from SMPL mesh
+        verts = smpl_output_xpose.vertices[0].cpu().numpy()
+        v_min, v_max = verts.min(axis=0), verts.max(axis=0)
+        padding = 0.05
+        grid_min = v_min - padding
+        grid_max = v_max + padding
+        
+        # Create 3D grid
+        resolution = 128  # Higher resolution for smoother meshes
+        x = np.linspace(grid_min[0], grid_max[0], resolution)
+        y = np.linspace(grid_min[1], grid_max[1], resolution)
+        z = np.linspace(grid_min[2], grid_max[2], resolution)
+        
+        grid_x, grid_y, grid_z = np.meshgrid(x, y, z, indexing='ij')
+        grid_points = np.stack([grid_x.ravel(), grid_y.ravel(), grid_z.ravel()], axis=1)
+        n_points = len(grid_points)
+        
+        print(f"  Querying {n_points} grid points...")
+        
+        # Query standard model in batches to get BT predictions
+        grid_points_torch = torch.FloatTensor(grid_points).unsqueeze(0).to(device)
+        batch_size = 50000
+        bt_probs = []  # Probability of being bone tissue
+        
+        with torch.no_grad():
+            for i in range(0, n_points, batch_size):
+                pts_batch = grid_points_torch[:, i:i+batch_size]
+                
+                skinning_weights, part_id = get_skinning_weights(
+                    pts_batch[0].cpu().numpy(),
+                    smpl_output_xpose.vertices[0].cpu().numpy(),
+                    self.smpl
+                )
+                skinning_weights = torch.FloatTensor(skinning_weights).unsqueeze(0).to(device)
+                
+                output = self.query(
+                    pts_batch, smpl_output_xpose,
+                    eval_mode=True, unposed=True,
+                    part_id=part_id, skinning_weights=skinning_weights
+                )
+                
+                pred_occ = output['pred_occ']  # [1, N, 4] for ['NO', 'LT', 'AT', 'BONE']
+                probs = torch.softmax(pred_occ, dim=-1)
+                bt_prob = probs[:, :, 3]  # BONE is index 3
+                bt_probs.append(bt_prob.cpu())
+        
+        bt_probs = torch.cat(bt_probs, dim=1).squeeze(0).numpy()  # [N]
+        
+        # Identify points that are bone (threshold 0.3 to be inclusive)
+        bt_threshold = 0.3
+        is_bt = bt_probs > bt_threshold
+        bt_indices = np.where(is_bt)[0]
+        bt_points = grid_points[is_bt]
+        
+        print(f"  Found {len(bt_points)} points with BT probability > {bt_threshold}")
+        
+        if len(bt_points) == 0:
+            print("Warning: No bone tissue detected by standard model")
+            return []
+        
+        # --- Stage 2: Query specialist only on BT points ---
+        print("Stage 2: Querying specialist model on bone tissue points...")
+        
+        bt_points_torch = torch.FloatTensor(bt_points).unsqueeze(0).to(device)
+        num_classes = len(specialist.train_cfg.mri_labels)
+        all_probs = []
+        
+        with torch.no_grad():
+            for i in range(0, len(bt_points), batch_size):
+                pts_batch = bt_points_torch[:, i:i+batch_size]
+                
+                skinning_weights, part_id = get_skinning_weights(
+                    pts_batch[0].cpu().numpy(),
+                    smpl_output_xpose.vertices[0].cpu().numpy(),
+                    specialist.smpl
+                )
+                skinning_weights = torch.FloatTensor(skinning_weights).unsqueeze(0).to(device)
+                
+                output = specialist.query(
+                    pts_batch, smpl_output_xpose,
+                    eval_mode=True, unposed=True,
+                    part_id=part_id, skinning_weights=skinning_weights
+                )
+                
+                pred_occ = output['pred_occ']
+                probs = torch.softmax(pred_occ, dim=-1)
+                all_probs.append(probs.cpu())
+        
+        all_probs = torch.cat(all_probs, dim=1).squeeze(0).numpy()  # [N_bt, num_classes]
+        
+        # --- Stage 3: Build occupancy grids and run marching cubes ---
+        print("Stage 3: Extracting bone meshes with marching cubes...")
+        
+        bone_labels = specialist.train_cfg.mri_labels
+        mesh_p_list = []
+        spacing = ((grid_max - grid_min) / (resolution - 1))
+        
+        for bone_idx, bone_name in enumerate(bone_labels):
+            print(f"  Processing {bone_name} (class {bone_idx})...")
+            
+            # Initialize grid with zeros
+            occ_grid = np.zeros((resolution, resolution, resolution), dtype=np.float64)
+            
+            # Fill in specialist probabilities for BT points
+            bone_probs = all_probs[:, bone_idx]
+            grid_indices = np.unravel_index(bt_indices, (resolution, resolution, resolution))
+            occ_grid[grid_indices] = bone_probs
+            
+            # Run marching cubes
+            try:
+                level = 0.5
+                if occ_grid.max() < level:
+                    print(f"    Skipping {bone_name}: max prob {occ_grid.max():.3f} < {level}")
+                    continue
+                
+                verts, faces, normals, values = measure.marching_cubes(
+                    volume=occ_grid,
+                    level=level,
+                    spacing=tuple(spacing),
+                    gradient_direction='ascent'
+                )
+                
+                # Transform to world coordinates
+                verts = verts + grid_min
+                
+                bone_mesh_cano = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+                # Apply Laplacian smoothing to reduce spikiness
+                trimesh.smoothing.filter_laplacian(bone_mesh_cano, iterations=3)
+                
+                if len(bone_mesh_cano.vertices) < 50:
+                    print(f"    Skipping {bone_name}: only {len(bone_mesh_cano.vertices)} vertices")
+                    continue
+                
+                # Pose to target pose
+                mesh_p = self.pose_unposed_tissue_mesh(bone_mesh_cano, smpl_output, do_compress=do_compress)
+                mesh_p_list.append(mesh_p)
+                print(f"    {bone_name}: {len(bone_mesh_cano.vertices)} vertices")
+                
+            except Exception as e:
+                print(f"    Failed to create mesh for {bone_name}: {e}")
+                continue
+        
+        return mesh_p_list
     
     
     def extract_shaped_mesh(self, smpl_output, channel=1, grid_res=64, max_queries=None, use_mise=False, mise_resolution0=32, bound_by_smpl=False):
@@ -658,7 +827,7 @@ class HITModel(torch.nn.Module):
             else:
                 # w_pd = self.deformer.query_weights(verts_batched, {'latent': cond['lbs'], 'betas': cond['betas']*0})
                 # cols = weights2colors(w_pd[0].cpu().numpy())
-                cols = tissue_palette[channel]
+                cols = tissue_palette[channel % len(tissue_palette)]
                 mesh = trimesh.Trimesh(verts, faces, vertex_colors=cols, process=False)
             # color meshes
             # vertex_colors = self.color_points(torch.from_numpy(verts).reshape(1, -1, 3).to(device), b_smpl_output_list[b_ind], max_queries)[0]

@@ -4,8 +4,8 @@ from omegaconf import OmegaConf
 
 import hit.hit_config as cg
 from hit.model.hit_model import HITModel
-from hit.utils.exppath import Exppath
 from hit.model.mysmpl import MySmpl
+from hit.utils.exppath import Exppath
 
 
 class HitLoader():
@@ -49,11 +49,21 @@ class HitLoader():
         cfg.train_cfg.networks.lbs.dropout = False
              
         return cls(checkpoint, cfg)
-            
+    
+    @classmethod
+    def load_from_path(cls, path, name):
+        cfg_file = os.path.join(path, 'config.yaml')
+        checkpoint = os.path.join(f"{path}/ckpts", name)
+        with open(cfg_file, 'r') as f:
+            cfg_checkpoint = OmegaConf.load(f)
+        cfg = cfg_checkpoint
+        cfg.train_cfg.networks.lbs.dropout = False
+        return cls(checkpoint, cfg)
+
     def load(self): 
         self.smpl = MySmpl(model_path=cg.smplx_models_path, gender=self.cfg.smpl_cfg.gender).to(self.device)
         self.hit_model = HITModel(train_cfg=self.cfg.train_cfg, smpl=self.smpl).to(self.device)
         self.hit_model.initialize(checkpoint_path=self.checkpoint, train_cfg = self.cfg.train_cfg)
-        
+
 
         

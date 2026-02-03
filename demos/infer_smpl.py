@@ -2,12 +2,65 @@
 
 import argparse
 import os
+
+import numpy as np
 import torch
 import trimesh
 
-from hit.utils.model import HitLoader
 from hit.utils.data import load_smpl_data
-import hit.hit_config as cg
+from hit.utils.model import HitLoader
+from hit.utils.smpl_utils import get_skinning_weights
+
+
+def refine_bones_with_fintune(bone_model, bt_mesh, smpl_output, hl_standard,data,  device, res=64):
+    v_min = bt_mesh.bounds[0]
+    v_max = bt_mesh.bounds[1]
+
+    # Use a standard meshgrid approach to avoid list comprehension scoping issues
+    x = np.linspace(v_min[0], v_max[0], res)
+    y = np.linspace(v_min[1], v_max[1], res)
+    z = np.linspace(v_min[2], v_max[2], res)
+    grid_x, grid_y, grid_z = np.meshgrid(x, y, z, indexing='ij')
+
+    # Flatten and stack into Nx3 points
+    points = np.stack([grid_x.ravel(), grid_y.ravel(), grid_z.ravel()], axis=1)
+
+    inside_mask = bt_mesh.contains(points)
+    target_points = torch.tensor(points[inside_mask], dtype=torch.float32).to(device)
+    weights, _ = get_skinning_weights(
+        target_points, 
+        smpl_output.vertices[0].detach().cpu().numpy(), 
+        hl_standard.smpl
+    )
+    if not inside_mask.any():
+        return {}
+
+    # 3. Batch Query
+    weights_torch = torch.from_numpy(weights).float().to(device)
+    points_torch = torch.from_numpy(target_points).float().to(device)
+    
+    batch_size = 50000
+    all_class_ids = []
+
+    with torch.no_grad():
+        for i in range(0, len(points_torch), batch_size):
+            pts_batch = points_torch[i:i+batch_size].unsqueeze(0)
+            w_batch = weights_torch[i:i+batch_size].unsqueeze(0)
+            
+            # Now we call query with the weights we just calculated
+            out = bone_model.query(pts_batch, smpl_output, skinning_weights=w_batch)
+            
+            ids = torch.argmax(out['occ'].squeeze(0), dim=-1).cpu().numpy()
+            all_class_ids.append(ids)
+
+    # 4. Reconstruct Grid and Export (Same as before)
+    class_ids = np.concatenate(all_class_ids)
+    full_labels = np.zeros(len(points))
+    full_labels[inside_mask] = class_ids
+    grid_3d = full_labels.reshape(res, res, res)
+    
+    return generate_bone_meshes(grid_3d, v_min, v_max, res)
+
 
 def main():
     
@@ -24,7 +77,7 @@ def main():
                         help='Output folder to save the generated meshes')
     parser.add_argument('--device', type=str, default='cuda:0', choices=['cuda:0', 'cpu'],
                         help='Device to use for inference')
-    parser.add_argument('--ckpt_choice', type=str, default='best', choices=['best', 'last'],
+    parser.add_argument('--ckpt_choice', type=str, default='last', choices=['best', 'last'],
                         help='Which checkpoint to use for inference')
     parser.add_argument('--output', type=str, default='meshes', choices=['meshes', 'slices'], 
                         help='Form of the output (either extract a mesh of each tissue, either extract slices of each tissue)')
@@ -59,10 +112,17 @@ def main():
     os.makedirs(out_folder, exist_ok=True)
     
     # Load HIT model
-    hl = HitLoader.from_expname(exp_name, ckpt_choice=ckpt_choice)
+    hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_female", "female_hit.ckpt")
+    #hl = HitLoader.from_expname(exp_name, ckpt_choice=ckpt_choice)
     hl.load()
     hl.hit_model.apply_compression = False
 
+    # Load fine-tuned model for bone tissue classification
+    fine_tuned_model = HitLoader.from_expname('hit_female_multibone_train_2', ckpt_choice='best')
+    fine_tuned_model.load()
+    fine_tuned_model.hit_model.apply_compression = False
+    
+    
     # Run smpl forward pass to get the SMPL mesh
     smpl_output = hl.smpl(betas=data['betas'], body_pose=data['body_pose'], global_orient=data['global_orient'], trans=data['transl'])
     
@@ -79,24 +139,40 @@ def main():
         print(f'Slices saved in {os.path.abspath(out_folder)}')
         
     elif args.output == 'meshes':
+
+        extracted_bone_meshes = hl.hit_model.forward_rigged_bones(specialist=fine_tuned_model.hit_model, betas=data['betas'], body_pose=data['body_pose'], 
+                                                                global_orient=data['global_orient'], 
+                                                                transl=data['transl'],
+                                                                mise_resolution0=64)        
         # Extract the mesh 
         extracted_meshes, _ = hl.hit_model.forward_rigged(data['betas'], 
                                                                 body_pose=data['body_pose'], 
                                                                 global_orient=data['global_orient'], 
                                                                 transl=data['transl'],
                                                                 mise_resolution0=64)
+
+        
+        
+        
         # Extracted meshes are in the form of a list of 3 trimesh objects corresponding to the 3 tissues 'LT', 'AT', 'BT'
         # LT : Lean Tissue (muscle and organs, merged with the visceral and intra-muscular fat)
         # AT : Adipose Tissue (subcutaneous fat)
         # BT : Bone Tissue (long bones, we only predict the femur, radius-ulna, tibia and fibula)
         
-        smpl_mesh = trimesh.Trimesh(vertices=smpl_output.vertices[0].detach().cpu().numpy(), faces=hl.smpl.faces)
         
+        smpl_mesh = trimesh.Trimesh(vertices=smpl_output.vertices[0].detach().cpu().numpy(), faces=hl.smpl.faces)
+
         # Save all the meshes
         smpl_mesh.export(os.path.join(out_folder, 'smpl_mesh.obj'))
         extracted_meshes[0].export(os.path.join(out_folder, 'LT_mesh.obj'))
         extracted_meshes[1].export(os.path.join(out_folder, 'AT_mesh.obj'))
         extracted_meshes[2].export(os.path.join(out_folder, 'BT_mesh.obj'))
+
+        extracted_bone_meshes[0].export(os.path.join(out_folder, 'Femur_mesh.obj'))
+        extracted_bone_meshes[1].export(os.path.join(out_folder, 'Pelvis_mesh.obj'))
+        extracted_bone_meshes[2].export(os.path.join(out_folder, 'Humerus_mesh.obj'))
+        extracted_bone_meshes[3].export(os.path.join(out_folder, 'Radius_Ulna_mesh.obj'))
+        extracted_bone_meshes[4].export(os.path.join(out_folder, 'Tibia_Fibula_mesh.obj'))
         
         print(f'Meshes saved in {os.path.abspath(out_folder)}')
     else:
