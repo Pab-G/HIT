@@ -1,12 +1,16 @@
 # HIT
 
-## Metrics
-
-Generate the test metrics (Accuracy, IOU, Dice score)
+## Train
 
 ```shell
 #python hit/train.py exp_name=hit_female smpl_cfg.gender=female  run_eval=True wdboff=True
-PYTHONPATH=. python hit/train.py     exp_name=hit_female_multibone     smpl_cfg.gender=female     train_cfg.to_train=occ     wdboff=True
+PYTHONPATH=. python hit/train.py     exp_name=WHATEVER     smpl_cfg.gender=female     train_cfg.to_train=occ     wdboff=True
+```
+
+## Evaluate:
+
+```shell
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_template --betas 0.64 0.19
 ```
 
 # Acknowledgments

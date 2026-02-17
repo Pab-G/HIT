@@ -197,7 +197,7 @@ class HITTraining(pl.LightningModule):
 
     def val_dataloader(self):
         mri_dataset = MRIDataset.from_config(
-            self.smpl_cfg, self.data_cfg, self.train_cfg, split="train"
+            self.smpl_cfg, self.data_cfg, self.train_cfg, split="val"
         )
         print(f"The val dataset used {self.cfg.num_workers} workers")
         return torch.utils.data.DataLoader(
@@ -405,9 +405,10 @@ class HITTraining(pl.LightningModule):
         pred_occ = output["pred_occ"]
         x_c = output["pts_c"]
         # wandb.log({"train/can_inside_pts": wandb.Object3D(pts_c_inside[0].detach().cpu().numpy())})
-        if self.global_step % 50 == 0:
-            self.log_3d_comparison(batch, pred_occ, x_c)
+        #if self.global_step % 50 == 0:
+        #    self.log_3d_comparison(batch, pred_occ, x_c)
         # Occupancy loss
+        #print(f"Predicted labels: {batch['mri_occ'].unique()}")  
         occ_loss = compute_occupancy_loss(self, batch, pred_occ)
         loss = loss + occ_loss
 
@@ -682,21 +683,12 @@ class HITTraining(pl.LightningModule):
         else:
             pred = pred_occ > 0.5
             
-        mapping = {3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
-        inv = {v: k for k, v in mapping.items()}  # 0->3, 1->4, ...
-
-        # pred: [B, N] with values in {0..4}
-        lut = torch.full((5,), -1, device=pred.device, dtype=pred.dtype)
-        for k, v in inv.items():
-            lut[k] = v
-
-        pred_mapped = lut[pred]  # 0->3, 1->4, 2->5, 3->6, 4->7
         part_id = batch["part_id"]
 
         val_loss_dict = metrics.validation_eval(
-            self.cfg, pred_mapped, gt_occ, part_id, body_mask
+            self.cfg, pred, gt_occ, part_id, body_mask
         )
-
+        self.log_3d_comparison(batch, pred_occ, output["pts_c"])
         return val_loss_dict
 
     def compute_test_loss(self, batch):
@@ -1048,10 +1040,11 @@ class HITTraining(pl.LightningModule):
         # 1. Get the 3D points and labels from the current overfit batch
         # points = batch["mri_points"][0].detach().cpu().numpy()
         points = pts_c[0].detach().cpu().numpy()
-        # Labels 0-4 (shifted from 3-7)
+        # Labels 0-4
         pred_labels = torch.argmax(pred_occ[0], dim=-1).detach().cpu().numpy()
-        gt_labels = (batch["mri_occ"][0] - 3).detach().cpu().long().numpy()
-
+        print(f"Unique predicted labels: {np.unique(pred_labels)}")
+        gt_labels = batch["mri_occ"][0].detach().cpu().long().numpy() #- 3 # Shift labels to be 0-4 instead of 3-7
+        print(f"Unique GT labels: {np.unique(gt_labels)}")
         # 2. Define your specialist palette
         # Red: Femur, Green: Pelvis, Blue: Humerus, Yellow: Radius, Magenta: Tibia
         palette = np.array(

@@ -32,11 +32,11 @@ MRI_SHAPE = (256, 256, 128)  # (512,512,128) for mpi
 BODY_ONLY = False  # When the whole MRI is sampled, only sample voxels in the body mask and around (dilatation is used)
 SMPL_KEYS = ["betas", "body_pose", "global_orient", "transl"]
 BONE_MAPPING = {
-    "Femur_pc.ply": 3,
-    "Pelvis_pc.ply": 4,
-    "Humerus_pc.ply": 5,
-    "Radius-Ulna_pc.ply": 6,
-    "Tibia-Fibula_pc.ply": 7,
+    "Femur_pc.ply": 0,
+    "Pelvis_pc.ply": 1,
+    "Humerus_pc.ply": 2,
+    "Radius-Ulna_pc.ply": 3,
+    "Tibia-Fibula_pc.ply": 4,
 }
 if BODY_ONLY:
     raise NotImplementedError("TODO: implement the composition computation ")
@@ -64,14 +64,13 @@ def visualize_dataloader_sample(dataset, index=0):
         labels = labels.numpy().astype(int)
 
     # Specialist Color Map:
-    # 3:Femur(Red), 4:Pelvis(Green), 5:Humerus(Blue), 6:Radius(Yellow), 7:Tibia(Magenta)
+    # 0:Femur(Red), 1:Pelvis(Green), 2:Humerus(Blue), 3:Radius(Yellow), 4:Tibia(Magenta)
     color_map = {
-        1: [200, 200, 200, 255],  # Gray (Skin)
-        3: [255, 0, 0, 255],  # Red
-        4: [0, 255, 0, 255],  # Green
-        5: [0, 0, 255, 255],  # Blue
-        6: [255, 255, 0, 255],  # Yellow
-        7: [255, 0, 255, 255],  # Magenta
+        0: [255, 0, 0, 255],  # Red (Femur)
+        1: [0, 255, 0, 255],  # Green (Pelvis)
+        2: [0, 0, 255, 255],  # Blue (Humerus)
+        3: [255, 255, 0, 255],  # Yellow (Radius-Ulna)
+        4: [255, 0, 255, 255],  # Magenta (Tibia-Fibula)
     }
 
     colors = np.array([color_map.get(l, [0, 0, 0, 255]) for l in labels])
@@ -272,9 +271,6 @@ class MRIDataset(torch.utils.data.Dataset):
         force_recache=False,
     ):
         # 1. Internal Imports to prevent NameErrors and environment issues
-        import glob
-
-        import trimesh
         from tqdm import tqdm
 
         from hit.utils.smpl_utils import get_skinning_weights
@@ -923,43 +919,43 @@ class MRIDataset(torch.utils.data.Dataset):
                 return self.smpl_data["betas"].shape[0]
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    class Map(dict):
-        def __getattr__(self, name):
-            return self.get(name)
+#     class Map(dict):
+#         def __getattr__(self, name):
+#             return self.get(name)
 
-        def __setattr__(self, name, value):
-            self[name] = value
+#         def __setattr__(self, name, value):
+#             self[name] = value
 
-    smpl_cfg = {"gender": "female"}
+#     smpl_cfg = {"gender": "female"}
 
-    data_cfg = Map(
-        {
-            "synthetic": False,
-            "sampling_strategy": "mri",
-            "nb_points_canspace": 0,
-            "n_skin_pts": 0,
-            "sample_can_points": False,
-            "sample_can_hands": False,
-            "sample_can_toes": False,  # Added
-            "n_points_hands": 0,  # Added to fix KeyError
-            "n_pts_mri": 15000,
-            "uniform_sampling_padding": 0.1,
-            "surface_offset_min": 0.01,
-            "surface_offset_max": 0.05,
-        }
-    )
+#     data_cfg = Map(
+#         {
+#             "synthetic": False,
+#             "sampling_strategy": "mri",
+#             "nb_points_canspace": 0,
+#             "n_skin_pts": 0,
+#             "sample_can_points": False,
+#             "sample_can_hands": False,
+#             "sample_can_toes": False,  # Added
+#             "n_points_hands": 0,  # Added to fix KeyError
+#             "n_pts_mri": 15000,
+#             "uniform_sampling_padding": 0.1,
+#             "surface_offset_min": 0.01,
+#             "surface_offset_max": 0.05,
+#         }
+#     )
 
-    train_cfg = Map({"to_train": "occ", "comp0_out": False, "mri_values": False})
+#     train_cfg = Map({"to_train": "occ", "comp0_out": False, "mri_values": False})
 
-    print("--- Initializing Dataset Object ---")
-    ds = MRIDataset.from_config(
-        smpl_cfg=smpl_cfg,
-        data_cfg=data_cfg,
-        train_cfg=train_cfg,
-        split="train",
-    )
+#     print("--- Initializing Dataset Object ---")
+#     ds = MRIDataset.from_config(
+#         smpl_cfg=smpl_cfg,
+#         data_cfg=data_cfg,
+#         train_cfg=train_cfg,
+#         split="train",
+#     )
 
-    # SUCCESS: Now we can finally see the bone specialists!
-    # visualize_warped_specialist(ds, index=0)
+#     # SUCCESS: Now we can finally see the bone specialists!
+#     # visualize_warped_specialist(ds, index=0)

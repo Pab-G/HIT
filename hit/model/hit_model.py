@@ -141,8 +141,6 @@ class HITModel(torch.nn.Module):
         - Points inside BT get specialist's probability for each bone class
         """
         from skimage import measure
-
-        from hit.utils.smpl_utils import get_skinning_weights
         
         smpl = self.smpl
         device = betas.device
@@ -179,6 +177,7 @@ class HITModel(torch.nn.Module):
         grid_points_torch = torch.FloatTensor(grid_points).unsqueeze(0).to(device)
         batch_size = 50000
         bt_probs = []  # Probability of being bone tissue
+        all_class_probs = []  # All class probabilities for argmax selection
         
         with torch.no_grad():
             for i in range(0, n_points, batch_size):
@@ -201,16 +200,18 @@ class HITModel(torch.nn.Module):
                 probs = torch.softmax(pred_occ, dim=-1)
                 bt_prob = probs[:, :, 3]  # BONE is index 3
                 bt_probs.append(bt_prob.cpu())
+                all_class_probs.append(probs.cpu())
         
         bt_probs = torch.cat(bt_probs, dim=1).squeeze(0).numpy()  # [N]
         
-        # Identify points that are bone (threshold 0.3 to be inclusive)
-        bt_threshold = 0.3
-        is_bt = bt_probs > bt_threshold
+        # Identify points where BONE is the most likely class (argmax)
+        all_class_probs = torch.cat(all_class_probs, dim=1).squeeze(0).numpy()  # [N, 4]
+        predicted_class = np.argmax(all_class_probs, axis=-1)  # [N]
+        is_bt = predicted_class == 3  # BONE is index 3
         bt_indices = np.where(is_bt)[0]
         bt_points = grid_points[is_bt]
         
-        print(f"  Found {len(bt_points)} points with BT probability > {bt_threshold}")
+        print(f"  Found {len(bt_points)} points where BONE is the argmax class")
         
         if len(bt_points) == 0:
             print("Warning: No bone tissue detected by standard model")

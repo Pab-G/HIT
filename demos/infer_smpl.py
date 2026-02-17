@@ -118,7 +118,7 @@ def main():
     hl.hit_model.apply_compression = False
 
     # Load fine-tuned model for bone tissue classification
-    fine_tuned_model = HitLoader.from_expname('hit_female_multibone_train_2', ckpt_choice='best')
+    fine_tuned_model = HitLoader.from_expname('FEMALE_MULTIBONE_2', ckpt_choice='best')
     fine_tuned_model.load()
     fine_tuned_model.hit_model.apply_compression = False
     

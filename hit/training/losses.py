@@ -34,10 +34,12 @@ def compute_occupancy_loss(hit_pl, batch, pred_occ):
     # Normalize weights
     weight = weight / weight.sum() * num_classes
 
+    labels = batch["mri_occ"].long() #- 3 #make 0-5
+
     # CrossEntropy for all classes (0-5)
     occ_loss = F.cross_entropy(
         input=pred_occ.reshape(-1, num_classes),
-        target=batch["mri_occ"].long().reshape(-1),  # Labels are already 0-5
+        target=labels.reshape(-1), 
         weight=weight,
     )
 
@@ -46,7 +48,7 @@ def compute_occupancy_loss(hit_pl, batch, pred_occ):
 
 def compute_beta_disp_loss(hit_pl, batch, batch_idx, cond, step, train_cfg):
     """Force the beta dislacement field to yield the same displacement as the SMPL model"""
-
+ 
     if train_cfg.random_beta_disp:
         betas = (torch.rand(batch["betas"].shape).to(hit_pl.device) - 0.5) * 4
         cond = cond_create(betas)

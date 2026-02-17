@@ -8,7 +8,7 @@ max_queries: 4000000 # Max nb of points passed to the network at once when runni
 # Set the training objective
 to_train: "occ" # 'occ', "pretrain", "compression"
 # Labels: 0=NO (background), 1-5=bones
-mri_labels: ["NO", "Femur", "Pelvis", "Humerus", "Radius-Ulna", "Tibia-Fibula"]
+mri_labels: ["Femur", "Pelvis", "Humerus", "Radius-Ulna", "Tibia-Fibula"] #NO
 # Pretraining
 load_pretrained_lbs: True
 load_pretrained_disp: True
