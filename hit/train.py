@@ -197,7 +197,7 @@ class HITTraining(pl.LightningModule):
 
     def val_dataloader(self):
         mri_dataset = MRIDataset.from_config(
-            self.smpl_cfg, self.data_cfg, self.train_cfg, split="val"
+            self.smpl_cfg, self.data_cfg, self.train_cfg, split="validation"
         )
         print(f"The val dataset used {self.cfg.num_workers} workers")
         return torch.utils.data.DataLoader(
@@ -400,7 +400,7 @@ class HITTraining(pl.LightningModule):
 
         # Pass inside points
         output = self.forward(
-            batch, x_f, unposed=unposed, template=template, use_part_id=True
+            batch, x_f, unposed=unposed, template=template, use_part_id=True 
         )
         pred_occ = output["pred_occ"]
         x_c = output["pts_c"]
@@ -1039,7 +1039,8 @@ class HITTraining(pl.LightningModule):
     def log_3d_comparison(self, batch, pred_occ, pts_c):
         # 1. Get the 3D points and labels from the current overfit batch
         # points = batch["mri_points"][0].detach().cpu().numpy()
-        points = pts_c[0].detach().cpu().numpy()
+        #points = pts_c[0].detach().cpu().numpy()
+        points = batch["mri_points"][0].detach().cpu().numpy()
         # Labels 0-4
         pred_labels = torch.argmax(pred_occ[0], dim=-1).detach().cpu().numpy()
         print(f"Unique predicted labels: {np.unique(pred_labels)}")

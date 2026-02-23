@@ -3,63 +3,11 @@
 import argparse
 import os
 
-import numpy as np
 import torch
 import trimesh
 
 from hit.utils.data import load_smpl_data
 from hit.utils.model import HitLoader
-from hit.utils.smpl_utils import get_skinning_weights
-
-
-def refine_bones_with_fintune(bone_model, bt_mesh, smpl_output, hl_standard,data,  device, res=64):
-    v_min = bt_mesh.bounds[0]
-    v_max = bt_mesh.bounds[1]
-
-    # Use a standard meshgrid approach to avoid list comprehension scoping issues
-    x = np.linspace(v_min[0], v_max[0], res)
-    y = np.linspace(v_min[1], v_max[1], res)
-    z = np.linspace(v_min[2], v_max[2], res)
-    grid_x, grid_y, grid_z = np.meshgrid(x, y, z, indexing='ij')
-
-    # Flatten and stack into Nx3 points
-    points = np.stack([grid_x.ravel(), grid_y.ravel(), grid_z.ravel()], axis=1)
-
-    inside_mask = bt_mesh.contains(points)
-    target_points = torch.tensor(points[inside_mask], dtype=torch.float32).to(device)
-    weights, _ = get_skinning_weights(
-        target_points, 
-        smpl_output.vertices[0].detach().cpu().numpy(), 
-        hl_standard.smpl
-    )
-    if not inside_mask.any():
-        return {}
-
-    # 3. Batch Query
-    weights_torch = torch.from_numpy(weights).float().to(device)
-    points_torch = torch.from_numpy(target_points).float().to(device)
-    
-    batch_size = 50000
-    all_class_ids = []
-
-    with torch.no_grad():
-        for i in range(0, len(points_torch), batch_size):
-            pts_batch = points_torch[i:i+batch_size].unsqueeze(0)
-            w_batch = weights_torch[i:i+batch_size].unsqueeze(0)
-            
-            # Now we call query with the weights we just calculated
-            out = bone_model.query(pts_batch, smpl_output, skinning_weights=w_batch)
-            
-            ids = torch.argmax(out['occ'].squeeze(0), dim=-1).cpu().numpy()
-            all_class_ids.append(ids)
-
-    # 4. Reconstruct Grid and Export (Same as before)
-    class_ids = np.concatenate(all_class_ids)
-    full_labels = np.zeros(len(points))
-    full_labels[inside_mask] = class_ids
-    grid_3d = full_labels.reshape(res, res, res)
-    
-    return generate_bone_meshes(grid_3d, v_min, v_max, res)
 
 
 def main():
@@ -106,21 +54,53 @@ def main():
         assert target_body.endswith('.pkl'), 'target_body should be a pkl file'
         assert os.path.exists(target_body), f'SMPL file "{target_body}" does not exist'
         data = load_smpl_data(target_body, device)
-
-        
-    # Create output folder
-    os.makedirs(out_folder, exist_ok=True)
+        # Extract body_pose from pose, pad to 69
+        # Always use the full pose, just like in training
+        pose = data["pose"]
+        if pose.ndim == 1:
+            pose = pose.unsqueeze(0)
+        if pose.shape[1] < 69:
+            pad = torch.zeros((pose.shape[0], 69 - pose.shape[1]), dtype=pose.dtype, device=pose.device)
+            pose = torch.cat([pose, pad], dim=1)
+        data["body_pose"] = pose
+        # Ensure all SMPL parameters are present, correct shape, and on the right device
+        for key, shape, alt_key in [
+            ("betas", (1, 10), None),
+            ("global_orient", (1, 3), "global_rot"),
+            ("transl", (1, 3), "trans"),
+        ]:
+            if key not in data:
+                # Try alternative key if provided
+                val = data.get(alt_key, None) if alt_key else None
+                if val is None:
+                    val = torch.zeros(*shape, device=device)
+                else:
+                    val = torch.tensor(val, dtype=torch.float32, device=device)
+                    if val.ndim == 1:
+                        val = val.unsqueeze(0)
+                data[key] = val
+            else:
+                val = data[key]
+                import numpy as np
+                if isinstance(val, np.ndarray):
+                    val = torch.tensor(val, dtype=torch.float32, device=device)
+                if val.ndim == 1:
+                    val = val.unsqueeze(0)
+                data[key] = val.to(device)
+                
+            # Create output folder
+            os.makedirs(out_folder, exist_ok=True)
     
     # Load HIT model
     hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_female", "female_hit.ckpt")
     #hl = HitLoader.from_expname(exp_name, ckpt_choice=ckpt_choice)
     hl.load()
-    hl.hit_model.apply_compression = False
+    hl.hit_model.apply_compression = True
 
     # Load fine-tuned model for bone tissue classification
-    fine_tuned_model = HitLoader.from_expname('FEMALE_MULTIBONE_2', ckpt_choice='best')
+    fine_tuned_model = HitLoader.from_expname('newjitter', ckpt_choice='best')
     fine_tuned_model.load()
-    fine_tuned_model.hit_model.apply_compression = False
+    fine_tuned_model.hit_model.apply_compression = True
     
     
     # Run smpl forward pass to get the SMPL mesh

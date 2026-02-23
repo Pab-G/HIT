@@ -13,6 +13,18 @@ PYTHONPATH=. python hit/train.py     exp_name=WHATEVER     smpl_cfg.gender=femal
 PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_template --betas 0.64 0.19
 ```
 
+Try this one: Female:
+
+```shell
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_template --betas 0.4650 -0.0454
+```
+
+Try this one: Male:
+
+```shell
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_template --betas -0.6759, -0.5946
+```
+
 # Acknowledgments
 
 We thank the authors of the [COAP](https://github.com/markomih/COAP) and [gDNA](https://github.com/xuchen-ethz/gdna) for their codebase. HIT is built on top of these two projects.

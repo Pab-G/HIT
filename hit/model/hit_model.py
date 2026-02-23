@@ -123,7 +123,7 @@ class HITModel(torch.nn.Module):
                                         template=False, 
                                         unposed = True, # The compression should be applied after posing
                                         color_mode='compression')[0]
-                
+
                 mesh_p = self.pose_unposed_tissue_mesh(mesh_s, smpl_output, do_compress=do_compress)
                 
                 # import ipdb; ipdb.set_trace()
@@ -212,7 +212,16 @@ class HITModel(torch.nn.Module):
         bt_points = grid_points[is_bt]
         
         print(f"  Found {len(bt_points)} points where BONE is the argmax class")
-        
+        ########################
+        import matplotlib.pyplot as plt
+
+        # Visualize bone tissue points
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(bt_points[:, 0], bt_points[:, 1], bt_points[:, 2], s=1, c='red')
+        ax.set_title('Bone Tissue Points (Stage 1)')
+        plt.show()
+        ########################
         if len(bt_points) == 0:
             print("Warning: No bone tissue detected by standard model")
             return []
@@ -247,6 +256,17 @@ class HITModel(torch.nn.Module):
         
         all_probs = torch.cat(all_probs, dim=1).squeeze(0).numpy()  # [N_bt, num_classes]
         
+        ###################################
+        # Color points by predicted bone class
+        print("HELLO")
+        bone_class_pred = np.argmax(all_probs, axis=1)  # [N_bt]
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        scatter = ax.scatter(bt_points[:, 0], bt_points[:, 1], bt_points[:, 2], s=1, c=bone_class_pred, cmap='tab10')
+        ax.set_title('Bone Class Predictions (Stage 2)')
+        plt.colorbar(scatter)
+        plt.show()
+        ###################################
         # --- Stage 3: Build occupancy grids and run marching cubes ---
         print("Stage 3: Extracting bone meshes with marching cubes...")
         
@@ -476,7 +496,7 @@ class HITModel(torch.nn.Module):
 
         if mask is None:
             mask = torch.ones( (n_batch, T), device=pts_d.device, dtype=torch.bool)
-
+           
         #jumphere
         if template:
             pts_c = pts_d
@@ -487,7 +507,7 @@ class HITModel(torch.nn.Module):
             occ_pd2 = occ_pd.squeeze(-1)
             # occ_smpl_pd = occ_smpl_pd.squeeze(-1)
             pts_c2 = pts_c 
-            
+        
         elif unposed:    
             
             pts_c = self.deformer.query_cano(points, 

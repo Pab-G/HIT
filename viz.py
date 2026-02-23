@@ -93,8 +93,100 @@ def meg(bone_path, num_samples=3000):
     print("LEFT: Original Surface | RIGHT: Specialist Volume (Synthesized)")
     trimesh.Scene([pc_surface, pc_internal]).show()
 
+import pickle as pkl
+
+import pyrender
+import torch
+
+import hit.hit_config as cg
+from hit.model.mysmpl import MySmpl
+
+
+def compare_smpl_datasets(path_specialist, path_repackaged, subject_idx=11, gender='female'):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # 1. Initialize SMPL model
+    print(f"--- Loading SMPL ({gender}) ---")
+    smpl = MySmpl(model_path=cg.smplx_models_path, gender=gender).to(device)
+    
+    all_verts = []
+    meshes = []
+    colors = [[1.0, 0.0, 0.0, 0.5], [0.0, 0.0, 1.0, 0.5]] # Red (Spec), Blue (Orig)
+
+    # 2. Load Data
+    with open(path_specialist, 'rb') as f:
+        data_spec = pkl.load(f)
+    with open(path_repackaged, 'rb') as f:
+        full_orig = pkl.load(f)
+    # Check if we have the index in the repackaged data
+    total_subjects = len(full_orig["seq_names"])
+    if subject_idx >= total_subjects:
+        raise ValueError(f"subject_idx {subject_idx} is out of bounds (Total: {total_subjects})")
+
+    print(f"Comparing Specialist file vs Original subject: {full_orig['seq_names'][subject_idx]}")
+
+    # 3. Process both entries
+    for i in range(2):
+        if i == 0:
+            name = "Specialist (MRI Bones)"
+            # Specialist data is usually a flat dict for one person
+            raw_betas = data_spec.get('betas', np.zeros(10))
+        else:
+            name = f"Original (Index {subject_idx})"
+            # Original data is columnar, extract index from the list
+            raw_betas = full_orig['betas'][subject_idx]
+
+        # --- SHAPE NORMALIZATION ---
+        if torch.is_tensor(raw_betas):
+            raw_betas = raw_betas.detach().cpu().numpy()
+        
+        # Force to (1, 10) for SMPL einsum compatibility
+        betas_np = np.array(raw_betas).flatten()[:10].astype(np.float32)
+        betas_torch = torch.from_numpy(betas_np).unsqueeze(0).to(device)
+        
+        # Zero out pose/transl to get the Canonical T-Pose alignment
+        empty_pose = torch.zeros((1, 69), dtype=torch.float32).to(device)
+        empty_transl = torch.zeros((1, 3), dtype=torch.float32).to(device)
+        
+        with torch.no_grad():
+            output = smpl(betas=betas_torch, body_pose=empty_pose, transl=empty_transl)
+            verts = output.vertices[0].detach().cpu().numpy()
+            all_verts.append(verts)
+        
+        mesh = trimesh.Trimesh(vertices=verts, faces=smpl.faces, process=False)
+        mesh.visual.vertex_colors = colors[i]
+        meshes.append(mesh)
+
+        print(f"Target {i+1}: {name}")
+        print(f"  - Betas: {betas_np[:3]}...")
+        print(f"  - Height: {verts[:,1].max() - verts[:,1].min():.4f}m")
+
+    # --- CALCULATE GEOMETRIC DRIFT ---
+    drift_vec = np.linalg.norm(all_verts[0] - all_verts[1], axis=1)
+    avg_drift = np.mean(drift_vec)
+    
+    print("\n📏 RESULTS:")
+    print(f"  - Average Vertex Drift: {avg_drift*1000:.4f} mm")
+    
+    if avg_drift > 0.001: # Threshold of 1mm
+        print("⚠️  MISALIGNMENT DETECTED: The unposing coordinates will differ.")
+    else:
+        print("✅ ALIGNMENT PERFECT: The templates are geometrically identical.")
+
+    # 4. Render
+    scene = pyrender.Scene(ambient_light=[0.5, 0.5, 0.5])
+    for m in meshes:
+        scene.add(pyrender.Mesh.from_trimesh(m, smooth=False))
+    
+    print("\n--- Visualizing Override: Red (Spec) vs Blue (Orig) ---")
+    pyrender.Viewer(scene, use_raymond_lighting=True)
 
 if __name__ == "__main__":
     # Ensure this path is correct
-    TEST_PATH = "mri_bones_release_v2/train/male/BH1470/per_part_pc/Femur_pc.ply"
-    visualize_sampling(TEST_PATH)
+    # Usage
+    path_a = "/home/yulong/pvbg-thesis/HIT/mri_bones_release_v2/validation/female/NASI_3443_TS/mri_smpl.pkl"
+    path_b = "/home/yulong/pvbg-thesis/HIT/hit_dataset_v1.0/repackaged/female_val.pkl"
+
+    compare_smpl_datasets(path_a, path_b, subject_idx=0)
+    #TEST_PATH = "mri_bones_release_v2/train/male/BH1470/per_part_pc/Femur_pc.ply"
+    #cvisualize_sampling(TEST_PATH)

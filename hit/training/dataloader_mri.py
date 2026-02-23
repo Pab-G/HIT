@@ -343,9 +343,14 @@ class MRIDataset(torch.utils.data.Dataset):
                     surface_samples = pts[idx]
 
                     # --- BLUE JITTER LOGIC ---
-                    jitter = np.random.normal(0, 0.008, (requested_size, 3))
+                    #jitter = np.random.normal(0, 0.008, (requested_size, 3)) old jitter
+                    jitter = np.random.normal(0, 0.015, (requested_size, 3)) # new hevier jitter
                     volumetric_pts = surface_samples + jitter
-
+                    
+                    #Since we have some distribution problems
+                    if split == 'train':
+                        global_drift = np.random.normal(0, 0.004, (1, 3)) # 4mm random shift for the whole body
+                        volumetric_pts += global_drift
                     mri_points.append(volumetric_pts)
                     gt_occ.append(np.full(requested_size, class_id))
 
