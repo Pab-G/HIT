@@ -32,7 +32,7 @@ weight_decay_lbs: 0.1
 seed_everything: 0 # -1 or seed
 
 # Set the training objective
-overfit_style: posed # 'template', 'unposed', posed, only considered if self.data_cfg.subjects != 'all'
+overfit_style: unposed # 'template', 'unposed', posed. Now also respected when subjects == 'all'
 
 # Test time options
 run_eval: False # Set to true to run the evaluation instead of training

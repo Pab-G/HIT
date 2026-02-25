@@ -65,7 +65,7 @@ mri_values : False
 
 
 # Debug
-skip_compression : False
+skip_compression : True
 no_comp_grad : True # Do not propagate the grad in the compression module when applying the decompression
 free_verts : False # Generate renderings with free vertices
 

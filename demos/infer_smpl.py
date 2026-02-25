@@ -92,13 +92,15 @@ def main():
             os.makedirs(out_folder, exist_ok=True)
     
     # Load HIT model
-    hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_female", "female_hit.ckpt")
+    #hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_female", "female_hit.ckpt")
+    hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_male", "male_hit.ckpt")
     #hl = HitLoader.from_expname(exp_name, ckpt_choice=ckpt_choice)
     hl.load()
     hl.hit_model.apply_compression = True
 
     # Load fine-tuned model for bone tissue classification
-    fine_tuned_model = HitLoader.from_expname('newjitter', ckpt_choice='best')
+    #fine_tuned_model = HitLoader.from_expname('newjitter', ckpt_choice='best')
+    fine_tuned_model = HitLoader.from_expname('OpusMale_4', ckpt_choice='best')
     fine_tuned_model.load()
     fine_tuned_model.hit_model.apply_compression = True
     
@@ -148,11 +150,18 @@ def main():
         extracted_meshes[1].export(os.path.join(out_folder, 'AT_mesh.obj'))
         extracted_meshes[2].export(os.path.join(out_folder, 'BT_mesh.obj'))
 
-        extracted_bone_meshes[0].export(os.path.join(out_folder, 'Femur_mesh.obj'))
-        extracted_bone_meshes[1].export(os.path.join(out_folder, 'Pelvis_mesh.obj'))
-        extracted_bone_meshes[2].export(os.path.join(out_folder, 'Humerus_mesh.obj'))
-        extracted_bone_meshes[3].export(os.path.join(out_folder, 'Radius_Ulna_mesh.obj'))
-        extracted_bone_meshes[4].export(os.path.join(out_folder, 'Tibia_Fibula_mesh.obj'))
+        # Export each bone mesh (dict: bone_name -> mesh)
+        bone_file_names = {
+            'Femur': 'Femur_mesh.obj',
+            'Pelvis': 'Pelvis_mesh.obj',
+            'Humerus': 'Humerus_mesh.obj',
+            'Radius-Ulna': 'Radius_Ulna_mesh.obj',
+            'Tibia-Fibula': 'Tibia_Fibula_mesh.obj',
+        }
+        for bone_name, mesh in extracted_bone_meshes.items():
+            fname = bone_file_names.get(bone_name, f'{bone_name}_mesh.obj')
+            mesh.export(os.path.join(out_folder, fname))
+            print(f'  Saved {fname}')
         
         print(f'Meshes saved in {os.path.abspath(out_folder)}')
     else:

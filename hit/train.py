@@ -361,6 +361,12 @@ class HITTraining(pl.LightningModule):
                 raise NotImplementedError(
                     f"Unknown overfit style {self.cfg.overfit_style}"
                 )
+        else:
+            # For multi-subject training, use overfit_style if specified
+            if self.cfg.overfit_style == "unposed":
+                unposed = True
+            elif self.cfg.overfit_style == "template":
+                template = True
 
         # ------------------------------- SMPL surface losses
 
@@ -629,7 +635,9 @@ class HITTraining(pl.LightningModule):
         part_id = []
         # for pts in torch.split(points, self.max_queries//batch_size, dim=1):
         #
-        output = self.forward(batch, points, eval_mode=True, use_part_id=True)# Part ID
+        # Match training: use unposed=True when overfit_style is "unposed"
+        unposed = (self.cfg.overfit_style == "unposed")
+        output = self.forward(batch, points, eval_mode=True, use_part_id=True, unposed=unposed)# Part ID
         
         
         # --- 3D CANONICAL CHECK START ---
@@ -710,6 +718,7 @@ class HITTraining(pl.LightningModule):
                 points[:, idx],
                 smpl_output,
                 eval_mode=True,
+                unposed=(self.cfg.overfit_style == "unposed"),
                 part_id=part_id[:, idx].to(points.device),
                 skinning_weights=skinning_weights[:, idx].to(points.device),
             )

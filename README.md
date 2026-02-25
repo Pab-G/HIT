@@ -4,7 +4,7 @@
 
 ```shell
 #python hit/train.py exp_name=hit_female smpl_cfg.gender=female  run_eval=True wdboff=True
-PYTHONPATH=. python hit/train.py     exp_name=WHATEVER     smpl_cfg.gender=female     train_cfg.to_train=occ     wdboff=True
+PYTHONPATH=. python hit/train.py     exp_name=WHATEVER     smpl_cfg.gender=male     train_cfg.to_train=occ     wdboff=True
 ```
 
 ## Evaluate:
@@ -22,7 +22,7 @@ PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_temp
 Try this one: Male:
 
 ```shell
-PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_template --betas -0.6759, -0.5946
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=OPUS_2 --to_infer smpl_template --betas -0.6759, -0.5946
 ```
 
 # Acknowledgments

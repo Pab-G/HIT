@@ -259,6 +259,40 @@ class MRIDataset(torch.utils.data.Dataset):
                 self.sample_can_hands()
             )  # We do this once for all the dataset
 
+    @staticmethod
+    def _procrustes_align(source_pts, target_pts):
+        """Compute rigid alignment (R, t) such that target ≈ R @ source + t.
+        Both inputs must be (N, 3) arrays with corresponding vertices."""
+        src_center = source_pts.mean(0)
+        tgt_center = target_pts.mean(0)
+        src_centered = source_pts - src_center
+        tgt_centered = target_pts - tgt_center
+        H = src_centered.T @ tgt_centered
+        U, S, Vt = np.linalg.svd(H)
+        d = np.linalg.det(Vt.T @ U.T)
+        D = np.diag([1, 1, np.sign(d)])
+        R = Vt.T @ D @ U.T
+        t = tgt_center - R @ src_center
+        return R, t
+
+    @staticmethod
+    def _build_v2_to_v1_mapping(mapping_json_path):
+        """Build a mapping from v2 subject name -> (gender, v1_split, numeric_id)."""
+        import re, json
+        with open(mapping_json_path) as f:
+            mapping = json.load(f)
+        v2_to_v1 = {}
+        for v2_name, paths in mapping.items():
+            m = re.search(r'/(male|female)/(train|test|val)/(\d+)\.gz', paths[1])
+            if m:
+                gender, v1_split, num_id = m.groups()
+                v2_to_v1[v2_name] = {
+                    'gender': gender,
+                    'v1_split': v1_split,
+                    'num_id': num_id,
+                }
+        return v2_to_v1
+
     @classmethod
     @torch.no_grad()
     def from_config(
@@ -289,6 +323,16 @@ class MRIDataset(torch.utils.data.Dataset):
                 f"Stop! No data found at {base_dir}. Ensure paths are correct."
             )
 
+        # --- LOAD V1 SMPL LOOKUP + MAPPING ---
+        v1_lookup_path = "/home/yulong/pvbg-thesis/HIT/hit_dataset_v1.0/repackaged/v1_smpl_lookup.pkl"
+        mapping_json_path = "/home/yulong/pvbg-thesis/HIT/hit_dataset_v1.0/repackaged/mapping.json"
+
+        print("--- Loading v1 SMPL lookup for Procrustes alignment ---")
+        with open(v1_lookup_path, "rb") as f:
+            v1_lookup = pkl.load(f)
+        v2_to_v1_map = cls._build_v2_to_v1_mapping(mapping_json_path)
+        print(f"    v1 lookup: {len(v1_lookup)} entries, v2->v1 map: {len(v2_to_v1_map)} entries")
+
         # Metadata and Model Setup
         smpl_tool = MySmpl(model_path=cg.smplx_models_path, gender=gender)
         varying_size_keys = [
@@ -300,30 +344,59 @@ class MRIDataset(torch.utils.data.Dataset):
         dataset_list = collections.defaultdict(list)
 
         # 3. Processing Loop
-        print("--- Loading Specialist Dataset with Blue Jitter Sampling ---")
+        print("--- Loading Specialist Dataset with Blue Jitter Sampling (v1 SMPL alignment) ---")
+        skipped = 0
         for pi, path in tqdm(enumerate(paths)):
+            v2_name = os.path.basename(path)
+
+            # --- LOOK UP V1 SMPL DATA ---
+            if v2_name not in v2_to_v1_map:
+                print(f"Warning: {v2_name} not in v2->v1 mapping, skipping...")
+                skipped += 1
+                continue
+
+            v1_info = v2_to_v1_map[v2_name]
+            v1_key = f"{v1_info['gender']}_{v1_info['v1_split']}_{v1_info['num_id']}"
+            if v1_key not in v1_lookup:
+                print(f"Warning: {v1_key} not in v1 lookup (PKL not available), skipping {v2_name}...")
+                skipped += 1
+                continue
+
+            v1_data = v1_lookup[v1_key]
+
+            # --- LOAD V2 SMPL (needed for Procrustes alignment) ---
             pkl_path = os.path.join(path, "mri_smpl.pkl")
             if not os.path.exists(pkl_path):
-                print(f"Warning: {pkl_path} does not exist, exiting...")
-                exit(1)
+                print(f"Warning: {pkl_path} does not exist, skipping...")
+                skipped += 1
+                continue
 
             with open(pkl_path, "rb") as f:
-                raw_data = pkl.load(f)
+                v2_raw = pkl.load(f)
 
-            # --- POSE DIMENSION FIX (63 -> 69) ---
-            body_pose_raw = raw_data["pose"]
-            if body_pose_raw.shape[0] == 63:
-                body_pose_69 = np.concatenate(
-                    [body_pose_raw, np.zeros(6, dtype=np.float32)]
+            # --- COMPUTE V2 SMPL MESH FOR ALIGNMENT ---
+            v2_body_pose = v2_raw["pose"]
+            if v2_body_pose.shape[0] == 63:
+                v2_body_pose = np.concatenate(
+                    [v2_body_pose, np.zeros(6, dtype=np.float32)]
                 )
-            else:
-                body_pose_69 = body_pose_raw
+
+            v2_smpl_out = smpl_tool(
+                betas=torch.tensor(v2_raw["betas"][:10]).unsqueeze(0).float(),
+                body_pose=torch.tensor(v2_body_pose).unsqueeze(0).float(),
+                global_orient=torch.tensor(v2_raw["global_rot"]).unsqueeze(0).float(),
+                transl=torch.tensor(v2_raw["trans"]).unsqueeze(0).float(),
+            )
+            v2_verts = v2_smpl_out.vertices[0].detach().cpu().numpy()
+
+            # --- PROCRUSTES: ALIGN V2 BONE POINTS TO V1 COORDINATE FRAME ---
+            v1_verts = v1_data["body_verts"].numpy()
+            R, t = cls._procrustes_align(v2_verts, v1_verts)
 
             # --- SAMPLING POINTS FROM PLY ---
             mri_points = []
             gt_occ = []
 
-            # Bone Specialist Sampling (Labels 3-7)
             bone_folder = os.path.join(path, "per_part_pc")
             for bone_file, class_id in BONE_MAPPING.items():
                 bone_path = os.path.join(bone_folder, bone_file)
@@ -332,7 +405,6 @@ class MRIDataset(torch.utils.data.Dataset):
                     pts = bone_data.vertices
 
                     # --- ROBUST SAMPLING FIX ---
-                    # Handles cases where bone points < population size
                     pop_size = len(pts)
                     requested_size = 3000
                     use_replace = pop_size < requested_size
@@ -343,59 +415,90 @@ class MRIDataset(torch.utils.data.Dataset):
                     surface_samples = pts[idx]
 
                     # --- BLUE JITTER LOGIC ---
-                    #jitter = np.random.normal(0, 0.008, (requested_size, 3)) old jitter
-                    jitter = np.random.normal(0, 0.015, (requested_size, 3)) # new hevier jitter
+                    jitter = np.random.normal(0, 0.015, (requested_size, 3))
                     volumetric_pts = surface_samples + jitter
-                    
-                    #Since we have some distribution problems
+
                     if split == 'train':
-                        global_drift = np.random.normal(0, 0.004, (1, 3)) # 4mm random shift for the whole body
+                        global_drift = np.random.normal(0, 0.004, (1, 3))
                         volumetric_pts += global_drift
-                    mri_points.append(volumetric_pts)
+
+                    # --- TRANSFORM TO V1 COORDINATE FRAME ---
+                    volumetric_pts = (R @ volumetric_pts.T).T + t
+
+                    mri_points.append(volumetric_pts.astype(np.float32))
                     gt_occ.append(np.full(requested_size, class_id))
 
             if len(mri_points) == 0:
-                print(f"Warning: No bone points found for {path}, exiting...")
-                exit(1)
+                print(f"Warning: No bone points found for {path}, skipping...")
+                skipped += 1
                 continue
-            
+
             # --- PREPARING PACKED DATA ---
             mri_pts_all = np.concatenate(mri_points, axis=0).astype(np.float32)
             occ_labels_all = np.concatenate(gt_occ, axis=0).astype(np.float32)
 
-            #from IPython import embed; embed(); exit(1)
-            # Create SMPL mesh to calculate internal skinning weights
-            smpl_out = smpl_tool(
-                betas=torch.tensor(raw_data["betas"][:10]).unsqueeze(0),
-                body_pose=torch.tensor(body_pose_69).unsqueeze(0),
-                global_orient=torch.tensor(raw_data["global_rot"]).unsqueeze(0),
-                transl=torch.tensor(raw_data["trans"]).unsqueeze(0),
+            # --- UNPOSE: TRANSFORM BONE POINTS FROM V1 POSED SPACE → X-POSE ---
+            # Compute V1 posed SMPL to get bone transforms (TFs)
+            v1_smpl_out = smpl_tool(
+                betas=v1_data["betas"][:10].unsqueeze(0).float(),
+                body_pose=v1_data["body_pose"].unsqueeze(0).float(),
+                global_orient=v1_data["global_orient"].unsqueeze(0).float(),
+                transl=v1_data["transl"].unsqueeze(0).float(),
+            )
+            v1_tfs = v1_smpl_out.tfs[0].detach().cpu().numpy()  # [24, 4, 4]
+
+            # Get temporary skinning weights from V1 posed verts (for LBS inverse)
+            tmp_weights, _ = get_skinning_weights(
+                mri_pts_all, v1_verts, smpl_tool
             )
 
-            # Calculate weights (Maps every 3D point to its nearest SMPL skeleton joints)
-            # here we might have to set part_id:
-            weights, part_id = get_skinning_weights(
-                mri_pts_all, smpl_out.vertices[0].cpu().numpy(), smpl_tool
+            # Inverse LBS: p_xpose = inv(sum_j(w_j * T_j)) @ p_posed
+            N = mri_pts_all.shape[0]
+            pts_homo = np.concatenate(
+                [mri_pts_all, np.ones((N, 1), dtype=np.float32)], axis=1
+            )  # [N, 4]
+            # Compute weighted blend of TFs per point: W_tf[n] = sum_j(w[n,j] * T[j])
+            # tmp_weights: [N, 24], v1_tfs: [24, 4, 4]
+            w_tf = np.einsum('nj,jik->nik', tmp_weights, v1_tfs)  # [N, 4, 4]
+            w_tf_inv = np.linalg.inv(w_tf)  # [N, 4, 4]
+            xpose_pts = np.einsum('nij,nj->ni', w_tf_inv, pts_homo)[:, :3]  # [N, 3]
+            mri_pts_all = xpose_pts.astype(np.float32)
+
+            # --- SKINNING WEIGHTS FROM X-POSE BODY VERTS ---
+            v1_xpose_out = smpl_tool(
+                betas=v1_data["betas"][:10].unsqueeze(0).float(),
+                body_pose=smpl_tool.x_cano().float(),
+                global_orient=torch.zeros(1, 3).float(),
+                transl=torch.zeros(1, 3).float(),
             )
+            v1_xpose_verts = v1_xpose_out.vertices[0].detach().cpu().numpy()
+            weights, part_id = get_skinning_weights(
+                mri_pts_all, v1_xpose_verts, smpl_tool
+            )
+
             # Pack into the 33-column tensor HIT expects
             packed = np.zeros((mri_pts_all.shape[0], 33), dtype=np.float32)
             packed[:, 0:3] = mri_pts_all
             packed[:, 6] = occ_labels_all
             packed[:, 7] = part_id
-            packed[:, 8] = (
-                1.0  # body_mask (tells model these points are inside the body)
-            )
+            packed[:, 8] = 1.0  # body_mask
             packed[:, 9:33] = weights
 
-            # --- STORE IN BUCKET ---
+            # --- STORE WITH X-POSE SMPL PARAMS ---
             dataset_list["mri_data_packed"].append(torch.from_numpy(packed))
             dataset_list["mri_data_shape0"].append(mri_pts_all.shape[0])
             dataset_list["mri_data_shape1"].append(packed.shape[1])
-            dataset_list["betas"].append(torch.tensor(raw_data["betas"][:10]))
-            dataset_list["body_pose"].append(torch.tensor(body_pose_69))
-            dataset_list["global_orient"].append(torch.tensor(raw_data["global_rot"]))
-            dataset_list["transl"].append(torch.tensor(raw_data["trans"]))
-            dataset_list["seq_names"].append(os.path.basename(path))
+            dataset_list["betas"].append(v1_data["betas"][:10].float())
+            dataset_list["body_pose"].append(smpl_tool.x_cano().squeeze(0).float())
+            dataset_list["global_orient"].append(torch.zeros(3).float())
+            dataset_list["transl"].append(torch.zeros(3).float())
+            dataset_list["seq_names"].append(v2_name)
+
+        if skipped > 0:
+            print(f"--- WARNING: Skipped {skipped} subjects (no v1 data available) ---")
+
+        if len(dataset_list["seq_names"]) == 0:
+            raise ValueError("No subjects loaded! Check v1 lookup and mapping.")
 
         # 4. Final Stacking
         data_stacked = {}
@@ -405,12 +508,7 @@ class MRIDataset(torch.utils.data.Dataset):
             else:
                 data_stacked[key] = val
 
-        print(f"--- SUCCESS: Loaded {len(dataset_list['seq_names'])} subjects ---")
-        
-        #bone_min, bone_max = mri_pts_all.min(0), mri_pts_all.max(0)
-        #body_min, body_max = smpl_out.vertices[0].min(0), smpl_out.vertices[0].max(0)
-        #print(f"Bone Bounding Box: {bone_min} to {bone_max}")
-        #print(f"Body Bounding Box: {body_min} to {body_max}")
+        print(f"--- SUCCESS: Loaded {len(dataset_list['seq_names'])} subjects (v1 SMPL aligned) ---")
         return cls(smpl_cfg, data_cfg, train_cfg, data_stacked, split)
 
     @torch.no_grad()

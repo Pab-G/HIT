@@ -227,29 +227,31 @@ class HITModel(torch.nn.Module):
             return []
         
         # --- Stage 2: Query specialist only on BT points ---
+        # The specialist is trained with x-pose data and unposed=True.
+        # Points are already in x-pose space (from the grid around smpl_output_xpose).
         print("Stage 2: Querying specialist model on bone tissue points...")
-        
+
         bt_points_torch = torch.FloatTensor(bt_points).unsqueeze(0).to(device)
         num_classes = len(specialist.train_cfg.mri_labels)
         all_probs = []
-        
+
         with torch.no_grad():
             for i in range(0, len(bt_points), batch_size):
                 pts_batch = bt_points_torch[:, i:i+batch_size]
-                
+
                 skinning_weights, part_id = get_skinning_weights(
                     pts_batch[0].cpu().numpy(),
                     smpl_output_xpose.vertices[0].cpu().numpy(),
                     specialist.smpl
                 )
                 skinning_weights = torch.FloatTensor(skinning_weights).unsqueeze(0).to(device)
-                
+
                 output = specialist.query(
                     pts_batch, smpl_output_xpose,
                     eval_mode=True, unposed=True,
                     part_id=part_id, skinning_weights=skinning_weights
                 )
-                
+
                 pred_occ = output['pred_occ']
                 probs = torch.softmax(pred_occ, dim=-1)
                 all_probs.append(probs.cpu())
@@ -271,55 +273,55 @@ class HITModel(torch.nn.Module):
         print("Stage 3: Extracting bone meshes with marching cubes...")
         
         bone_labels = specialist.train_cfg.mri_labels
-        mesh_p_list = []
+        bone_meshes = {}  # name -> mesh
         spacing = ((grid_max - grid_min) / (resolution - 1))
-        
+
         for bone_idx, bone_name in enumerate(bone_labels):
             print(f"  Processing {bone_name} (class {bone_idx})...")
-            
+
             # Initialize grid with zeros
             occ_grid = np.zeros((resolution, resolution, resolution), dtype=np.float64)
-            
+
             # Fill in specialist probabilities for BT points
             bone_probs = all_probs[:, bone_idx]
             grid_indices = np.unravel_index(bt_indices, (resolution, resolution, resolution))
             occ_grid[grid_indices] = bone_probs
-            
+
             # Run marching cubes
             try:
                 level = 0.5
                 if occ_grid.max() < level:
                     print(f"    Skipping {bone_name}: max prob {occ_grid.max():.3f} < {level}")
                     continue
-                
+
                 verts, faces, normals, values = measure.marching_cubes(
                     volume=occ_grid,
                     level=level,
                     spacing=tuple(spacing),
                     gradient_direction='ascent'
                 )
-                
+
                 # Transform to world coordinates
                 verts = verts + grid_min
-                
+
                 bone_mesh_cano = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
                 # Apply Laplacian smoothing to reduce spikiness
                 trimesh.smoothing.filter_laplacian(bone_mesh_cano, iterations=3)
-                
+
                 if len(bone_mesh_cano.vertices) < 50:
                     print(f"    Skipping {bone_name}: only {len(bone_mesh_cano.vertices)} vertices")
                     continue
-                
+
                 # Pose to target pose
                 mesh_p = self.pose_unposed_tissue_mesh(bone_mesh_cano, smpl_output, do_compress=do_compress)
-                mesh_p_list.append(mesh_p)
+                bone_meshes[bone_name] = mesh_p
                 print(f"    {bone_name}: {len(bone_mesh_cano.vertices)} vertices")
-                
+
             except Exception as e:
                 print(f"    Failed to create mesh for {bone_name}: {e}")
                 continue
-        
-        return mesh_p_list
+
+        return bone_meshes
     
     
     def extract_shaped_mesh(self, smpl_output, channel=1, grid_res=64, max_queries=None, use_mise=False, mise_resolution0=32, bound_by_smpl=False):
