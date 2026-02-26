@@ -418,6 +418,68 @@ def compute_part_dice(data_cfg, pred_label, gt_label, part_id, body_mask):
     return part_dict
 
 
+def compute_per_bone_distance(pred_label, gt_label, points, bone_names):
+    """One-sided mean surface distance from GT to predicted points, per bone.
+
+    For each bone class, finds the nearest predicted point for every GT point
+    and returns the mean distance. Distances are aggregated (averaged) across
+    all bones per subject.
+
+    Args:
+        pred_label: (B, T) predicted class indices
+        gt_label: (B, T) ground truth class indices
+        points: (B, T, 3) 3D coordinates of the query points
+        bone_names: list of bone class names (length = num_classes)
+
+    Returns:
+        dict with keys like "dist_{bone_name}" per bone and "dist_mean" aggregate
+    """
+    from scipy.spatial import cKDTree
+
+    num_classes = len(bone_names)
+    pred_np = pred_label[0].cpu().numpy()
+    gt_np = gt_label[0].cpu().numpy()
+    pts_np = points[0].cpu().numpy()
+
+    dist_dict = {}
+    bone_dists = []
+
+    for ci in range(num_classes):
+        gt_mask = gt_np == ci
+        pred_mask = pred_np == ci
+
+        gt_pts = pts_np[gt_mask]
+        pred_pts = pts_np[pred_mask]
+
+        bone_name = bone_names[ci]
+
+        if len(gt_pts) == 0:
+            # No GT points for this bone — skip
+            dist_dict[f"dist_{bone_name}"] = torch.tensor(0.0)
+            continue
+
+        if len(pred_pts) == 0:
+            # Model predicted nothing for this bone — large penalty
+            dist_dict[f"dist_{bone_name}"] = torch.tensor(float("nan"))
+            bone_dists.append(float("nan"))
+            continue
+
+        tree = cKDTree(pred_pts)
+        dists, _ = tree.query(gt_pts, k=1)
+        mean_dist = float(np.mean(dists))
+
+        dist_dict[f"dist_{bone_name}"] = torch.tensor(mean_dist)
+        bone_dists.append(mean_dist)
+
+    # Aggregate: mean across bones (ignoring NaN)
+    if bone_dists:
+        dist_dict["dist_mean"] = torch.tensor(float(np.nanmean(bone_dists)))
+    else:
+        dist_dict["dist_mean"] = torch.tensor(0.0)
+
+    return dist_dict
+
+
 def validation_eval(cfg, pred_label, gt_label, part_id, body_mask):
     val_loss_dict = {}
     #import ipdb; ipdb.set_trace()

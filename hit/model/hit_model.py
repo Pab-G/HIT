@@ -320,6 +320,17 @@ class HITModel(torch.nn.Module):
             except Exception as e:
                 print(f"    Failed to create mesh for {bone_name}: {e}")
                 continue
+        if bone_meshes:
+            print("Stage 4: Merging all individual bones into a single mesh...")
+            # Concatenate all meshes in the dictionary into one Trimesh object
+            merged_mesh = trimesh.util.concatenate(list(bone_meshes.values()))
+            
+            # Export the merged mesh
+            merged_mesh.export("merged_skeleton_prediction.obj")
+            print("  Successfully saved merged mesh to merged_skeleton_prediction.obj")
+            
+            # Optional: Add it to the dictionary if you want to return it too
+            bone_meshes['merged_skeleton'] = merged_mesh
 
         return bone_meshes
     

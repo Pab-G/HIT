@@ -611,14 +611,15 @@ class HITTraining(pl.LightningModule):
         test_metric = {}
         if not self.cfg.visuals_only:
             test_metric = self.compute_test_loss(batch)
-            # test_metric.update({'subject_name': batch['seq_names'][0]})
-            # print(f"Subject {batch['seq_names'][0]}")
-            # for key, val in test_metric.items():
-            #     self.log(f"test/{key}", val, sync_dist=True)
 
         if self.cfg.eval_export_visuals or self.cfg["render_dataset"]:
             print("Exporting visuals")
             self.export_visuals(batch, batch["seq_names"])
+
+        # PL 2.0+: store outputs manually for on_test_epoch_end
+        if not hasattr(self, "_test_outputs"):
+            self._test_outputs = []
+        self._test_outputs.append(test_metric)
 
         return test_metric
 
@@ -738,14 +739,27 @@ class HITTraining(pl.LightningModule):
         accuracy = metrics.compute_accuracy(pred_label, gt_label)
         test_loss_dict.update({"accuracy": accuracy})
 
+        # Per-bone one-sided mean surface distance (GT → Pred)
+        bone_dist_dict = metrics.compute_per_bone_distance(
+            pred_label, gt_label, points, self.train_cfg.mri_labels
+        )
+        test_loss_dict.update(bone_dist_dict)
+
         # To fix
         # part_dice_dict = metrics.compute_part_dice(self.data_cfg,pred_label, gt_label, part_id, body_mask)
         # test_loss_dict.update(part_dice_dict)
 
-        mri_shape = [max(batch["mri_size"][:, i]).item() for i in range(3)]
+        # Tissue-type Dice/composition only applies to tissue models (NO/LT/AT/BONE)
+        tissue_labels = ["NO", "LT", "AT", "BONE"]
+        is_tissue_model = set(self.train_cfg.mri_labels) == set(tissue_labels)
+
+        if is_tissue_model:
+            mri_shape = [max(batch["mri_size"][:, i]).item() for i in range(3)]
 
         images_dict = {}
         for li, mri_label in enumerate(["NO", "LT", "AT", "BONE"]):
+            if not is_tissue_model:
+                break
             pred_occ = pred_label == li
             #
             gt_occ = gt_label == li
@@ -922,14 +936,11 @@ class HITTraining(pl.LightningModule):
 
         return dict(test_loss_dict)
 
-    def test_epoch_end(self, outputs):
-        """Aggregate test predictions.
+    def on_test_epoch_end(self):
+        """Aggregate test predictions (PL 2.0+ compatible)."""
+        outputs = self._test_outputs
+        self._test_outputs = []
 
-        Args:
-            outputs (list): list of dictionaries containing scores
-        """
-
-        # import ipdb; ipdb.set_trace()
         test_metric_keys = outputs[0].keys()
         test_metric_stacked = {
             key: torch.stack([x[key] for x in outputs]) for key in test_metric_keys
@@ -953,6 +964,13 @@ class HITTraining(pl.LightningModule):
             "comp_BONE",
             "comp_NO",
         ]
+
+        # Add per-bone distance keys dynamically
+        dist_keys = [k for k in test_metric_keys if k.startswith("dist_")]
+        sorted_keys.extend(sorted(dist_keys))
+
+        # Only keep keys that actually exist in the outputs
+        sorted_keys = [k for k in sorted_keys if k in test_metric_keys]
 
         part_metric = {}
         key_list = list(agg_metric.keys())
@@ -1183,7 +1201,8 @@ def main(cfg):
         from utils.exppath import Exppath
 
         exppath = Exppath(cfg.exp_name)
-        ckpt_path = exppath.get_best_checkpoint()
+        #ckpt_path = exppath.get_best_checkpoint()
+        ckpt_path = "/home/yulong/pvbg-thesis/HIT/pretrained/OpusMale_4/ckpts/last.ckpt"
         # ckpt_path = checkpoint_callback.best_model_path # this is not working for some reason
     elif os.path.exists(
         os.path.join(
