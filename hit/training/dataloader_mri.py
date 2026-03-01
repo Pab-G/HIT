@@ -437,61 +437,29 @@ class MRIDataset(torch.utils.data.Dataset):
             mri_pts_all = np.concatenate(mri_points, axis=0).astype(np.float32)
             occ_labels_all = np.concatenate(gt_occ, axis=0).astype(np.float32)
 
-            # --- UNPOSE: TRANSFORM BONE POINTS FROM V1 POSED SPACE → X-POSE ---
-            # Compute V1 posed SMPL to get bone transforms (TFs)
-            v1_smpl_out = smpl_tool(
-                betas=v1_data["betas"][:10].unsqueeze(0).float(),
-                body_pose=v1_data["body_pose"].unsqueeze(0).float(),
-                global_orient=v1_data["global_orient"].unsqueeze(0).float(),
-                transl=v1_data["transl"].unsqueeze(0).float(),
-            )
-            v1_tfs = v1_smpl_out.tfs[0].detach().cpu().numpy()  # [24, 4, 4]
-
-            # Get temporary skinning weights from V1 posed verts (for LBS inverse)
-            tmp_weights, _ = get_skinning_weights(
-                mri_pts_all, v1_verts, smpl_tool
-            )
-
-            # Inverse LBS: p_xpose = inv(sum_j(w_j * T_j)) @ p_posed
-            N = mri_pts_all.shape[0]
-            pts_homo = np.concatenate(
-                [mri_pts_all, np.ones((N, 1), dtype=np.float32)], axis=1
-            )  # [N, 4]
-            # Compute weighted blend of TFs per point: W_tf[n] = sum_j(w[n,j] * T[j])
-            # tmp_weights: [N, 24], v1_tfs: [24, 4, 4]
-            w_tf = np.einsum('nj,jik->nik', tmp_weights, v1_tfs)  # [N, 4, 4]
-            w_tf_inv = np.linalg.inv(w_tf)  # [N, 4, 4]
-            xpose_pts = np.einsum('nij,nj->ni', w_tf_inv, pts_homo)[:, :3]  # [N, 3]
-            mri_pts_all = xpose_pts.astype(np.float32)
-
-            # --- SKINNING WEIGHTS FROM X-POSE BODY VERTS ---
-            v1_xpose_out = smpl_tool(
-                betas=v1_data["betas"][:10].unsqueeze(0).float(),
-                body_pose=smpl_tool.x_cano().float(),
-                global_orient=torch.zeros(1, 3).float(),
-                transl=torch.zeros(1, 3).float(),
-            )
-            v1_xpose_verts = v1_xpose_out.vertices[0].detach().cpu().numpy()
+            # --- SKINNING WEIGHTS FROM V1 POSED VERTS ---
+            # Points are in v1 posed space; compute weights from posed vertices
+            # (v1_verts is the v1 posed mesh from the Procrustes step)
             weights, part_id = get_skinning_weights(
-                mri_pts_all, v1_xpose_verts, smpl_tool
+                mri_pts_all, v1_verts, smpl_tool
             )
 
             # Pack into the 33-column tensor HIT expects
             packed = np.zeros((mri_pts_all.shape[0], 33), dtype=np.float32)
-            packed[:, 0:3] = mri_pts_all
+            packed[:, 0:3] = mri_pts_all  # bone points in v1 POSED space
             packed[:, 6] = occ_labels_all
             packed[:, 7] = part_id
             packed[:, 8] = 1.0  # body_mask
             packed[:, 9:33] = weights
 
-            # --- STORE WITH X-POSE SMPL PARAMS ---
+            # --- STORE WITH ACTUAL V1 SMPL PARAMS (not x-pose) ---
             dataset_list["mri_data_packed"].append(torch.from_numpy(packed))
             dataset_list["mri_data_shape0"].append(mri_pts_all.shape[0])
             dataset_list["mri_data_shape1"].append(packed.shape[1])
             dataset_list["betas"].append(v1_data["betas"][:10].float())
-            dataset_list["body_pose"].append(smpl_tool.x_cano().squeeze(0).float())
-            dataset_list["global_orient"].append(torch.zeros(3).float())
-            dataset_list["transl"].append(torch.zeros(3).float())
+            dataset_list["body_pose"].append(v1_data["body_pose"].float())
+            dataset_list["global_orient"].append(v1_data["global_orient"].float())
+            dataset_list["transl"].append(v1_data["transl"].float())
             dataset_list["seq_names"].append(v2_name)
 
         if skipped > 0:

@@ -26,16 +26,16 @@ root_init: 9 # or 11 or 13, Number of init root for the root findign algo
 
 ##################### Losses weights #####################
 lambda_occ: 100 # Weight for the occupancy loss
-lambda_lbs: 100 # Force LBS skinning weights to equal SMPL's on the canonical SMPL vertices
+lambda_lbs: 0 # Force LBS skinning weights to equal SMPL's on the canonical SMPL vertices (disabled: deformer frozen)
 # unshaping regularization
-lambda_betas: 100 # Force the predicted betas offset to be close to the ground truth betas offset on the SMPL shaped vertices
-lambda_beta0: 1 # Forces the beta offset to be close to zero (avoid crazy displacement away from the surface)
+lambda_betas: 0 # Force the predicted betas offset to be close to the ground truth betas offset (disabled: deformer frozen)
+lambda_beta0: 0 # Forces the beta offset to be close to zero (disabled: deformer frozen)
 # Canonical space regularization
 lambda_outcan: 0 # Forces the predicted occupancy outside the canonical body mesh to be zero
 lambda_hands: 0 # Forces the predicted occupancy in the canonical hands to be LT
 # Compression regularization
-lambda_compression: 10
-lambda_comp0: 10
+lambda_compression: 0 # (disabled: deformer frozen)
+lambda_comp0: 0 # (disabled: deformer frozen)
 #unused
 lambda_mri: 10 # weight for the mri loss
 lambda_outmri: 10
