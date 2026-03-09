@@ -209,9 +209,9 @@ def generate_specialist_meshes(args, subject_paths):
 
     Returns dict: subject_name -> {bone_name: mesh_in_v2_space, 'merged': mesh}
     """
-    from hit.utils.model import HitLoader
-    from hit.model.mysmpl import MySmpl
     import hit.hit_config as cg
+    from hit.model.mysmpl import MySmpl
+    from hit.utils.model import HitLoader
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -256,7 +256,7 @@ def generate_specialist_meshes(args, subject_paths):
 
         # Look up v1 data
         if subj not in v2_to_v1:
-            print(f"  SKIP: no v2->v1 mapping")
+            print("  SKIP: no v2->v1 mapping")
             continue
         v1_key = v2_to_v1[subj]
         if v1_key not in v1_lookup:

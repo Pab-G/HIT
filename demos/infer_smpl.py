@@ -100,7 +100,7 @@ def main():
 
     # Load fine-tuned model for bone tissue classification
     #fine_tuned_model = HitLoader.from_expname('newjitter', ckpt_choice='best')
-    fine_tuned_model = HitLoader.from_expname('NewBranch', ckpt_choice='best')
+    fine_tuned_model = HitLoader.from_expname('smaller-mlp', ckpt_choice='best')
     fine_tuned_model.load()
     fine_tuned_model.hit_model.apply_compression = True
     

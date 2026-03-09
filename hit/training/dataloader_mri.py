@@ -278,7 +278,8 @@ class MRIDataset(torch.utils.data.Dataset):
     @staticmethod
     def _build_v2_to_v1_mapping(mapping_json_path):
         """Build a mapping from v2 subject name -> (gender, v1_split, numeric_id)."""
-        import re, json
+        import json
+        import re
         with open(mapping_json_path) as f:
             mapping = json.load(f)
         v2_to_v1 = {}

@@ -260,7 +260,6 @@ class HITModel(torch.nn.Module):
         
         ###################################
         # Color points by predicted bone class
-        print("HELLO")
         bone_class_pred = np.argmax(all_probs, axis=1)  # [N_bt]
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
@@ -276,11 +275,32 @@ class HITModel(torch.nn.Module):
         bone_meshes = {}  # name -> mesh
         spacing = ((grid_max - grid_min) / (resolution - 1))
 
+        # Use all predicted points
+        #bone_assignment = np.argmax(all_probs, axis=1)  # [N_bt]
+        
+        # In case you want to do KNN: 
+        # KNN smoothing: replace each point's label with the majority among its neighbors
+        #from sklearn.neighbors import KDTree
+        #k = 7  # number of neighbors (odd to avoid ties)
+        #tree = KDTree(bt_points)
+        #_, neighbor_indices = tree.query(bt_points, k=k)  # [N_bt, k]
+        # Gather neighbor labels and take majority vote
+        # neighbor_labels = bone_assignment[neighbor_indices]  # [N_bt, k]
+        # from scipy.stats import mode
+        # smoothed_assignment, _ = mode(neighbor_labels, axis=1)
+        # bone_assignment = smoothed_assignment.squeeze()
+                
+        
         for bone_idx, bone_name in enumerate(bone_labels):
             print(f"  Processing {bone_name} (class {bone_idx})...")
 
             # Initialize grid with zeros
             occ_grid = np.zeros((resolution, resolution, resolution), dtype=np.float64)
+            
+            # If we want to use all predictions
+            #bone_mask = (bone_assignment == bone_idx).astype(np.float64)
+            #grid_indices = np.unravel_index(bt_indices, (resolution, resolution, resolution))
+            #occ_grid[grid_indices] = bone_mask
 
             # Fill in specialist probabilities for BT points
             bone_probs = all_probs[:, bone_idx]

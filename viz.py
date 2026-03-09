@@ -132,7 +132,7 @@ def compare_smpl_datasets(path_specialist, path_repackaged, subject_idx=11, gend
             # Specialist data is usually a flat dict for one person
             raw_betas = data_spec.get('betas', np.zeros(10))
         else:
-            name = f"Original (Index {subject_idx})"
+            name = f"Original (Index {full_orig['seq_names'][subject_idx]})"
             # Original data is columnar, extract index from the list
             raw_betas = full_orig['betas'][subject_idx]
 

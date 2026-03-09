@@ -2,13 +2,13 @@ tissue: # mlp learning the occupancy of the different tissues
   _target_: lib.model.network.ImplicitNetwork
   d_in: 3
   d_out: 1
-  width: 256
-  depth: 4
+  width: 64 #256 #64
+  depth: 2 #4 # 2
   geometric_init: true
   bias: 1
-  skip_in: 4
+  skip_in: -1 # -4
   weight_norm: true
-  multires: 5 # pose encoding 
+  multires: 5 # pose encoding
   pose_cond_dim: 69
   pose_cond_layer: []
   pose_embed_dim: -1
@@ -64,7 +64,6 @@ lbs:
   soft_blend: 20
   lbs_softmax: True
   dropout: 0
-
 
 compression:
   _target_: lib.model.network.ImplicitNetwork
@@ -142,7 +141,7 @@ mri_val: # mlp learning the MRI value in R3 in he canonical space
   bias: 1
   skip_in: 4
   weight_norm: true
-  multires: 4 # pose encoding 
+  multires: 4 # pose encoding
   pose_cond_dim: 69
   pose_cond_layer: []
   pose_embed_dim: -1
