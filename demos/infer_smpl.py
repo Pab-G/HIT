@@ -91,16 +91,13 @@ def main():
             # Create output folder
             os.makedirs(out_folder, exist_ok=True)
     
-    # Load HIT model
-    #hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_female", "female_hit.ckpt")
+    # Load HIT model: (add your path here)
     hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_male", "male_hit.ckpt")
-    #hl = HitLoader.from_expname(exp_name, ckpt_choice=ckpt_choice)
     hl.load()
     hl.hit_model.apply_compression = True
 
-    # Load fine-tuned model for bone tissue classification
-    #fine_tuned_model = HitLoader.from_expname('newjitter', ckpt_choice='best')
-    fine_tuned_model = HitLoader.from_expname('smaller-mlp', ckpt_choice='best')
+    # Load fine-tuned model for bone tissue classification: (add your path here)
+    fine_tuned_model = HitLoader.from_expname('NewBranch', ckpt_choice='best')
     fine_tuned_model.load()
     fine_tuned_model.hit_model.apply_compression = True
     

@@ -4,8 +4,18 @@
 
 ```shell
 #python hit/train.py exp_name=hit_female smpl_cfg.gender=female  run_eval=True wdboff=True
-PYTHONPATH=. python hit/train.py     exp_name=WHATEVER     smpl_cfg.gender=male     train_cfg.to_train=occ     wdboff=True
+
+
+PYTHONPATH=. python hit/train.py     exp_name=posed-no-noise     smpl_cfg.gender=
+male     train_cfg.to_train=occ     wdboff=False overfit_style=posed
+
 ```
+
+#####
+
+PYTHONPATH=. python demos/infer*smpl.py --exp_name=SMALL --to_infer smpl_file --target_body /home/yulong/pvbg-thesis/HIT/mri_bones_release_v2/test/male/GKF_TSneu*/mri_smpl.pkl
+
+#####
 
 ## Evaluate:
 
@@ -22,7 +32,7 @@ PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_temp
 Try this one: Male:
 
 ```shell
-PYTHONPATH=. python demos/infer_smpl.py --exp_name=OPUS_2 --to_infer smpl_template --betas -0.6759, -0.5946
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=OPUS_2 --to_infer smpl_template --betas -1.1172, 0.2070
 ```
 
 # Acknowledgments

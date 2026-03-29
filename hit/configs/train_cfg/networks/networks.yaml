@@ -2,11 +2,11 @@ tissue: # mlp learning the occupancy of the different tissues
   _target_: lib.model.network.ImplicitNetwork
   d_in: 3
   d_out: 1
-  width: 64 #256 #64
-  depth: 2 #4 # 2
+  width: 256 #256 #64
+  depth: 4 #4 # 2
   geometric_init: true
   bias: 1
-  skip_in: -1 # -4
+  skip_in: 4 # 4
   weight_norm: true
   multires: 5 # pose encoding
   pose_cond_dim: 69
