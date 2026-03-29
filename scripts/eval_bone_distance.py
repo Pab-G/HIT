@@ -240,19 +240,7 @@ def generate_specialist_meshes(args, subject_paths):
         print(f"\n--- {subj} ({gender}) ---")
         cache_dir = os.path.join(args.output_dir, subj)
 
-        # Check cache
-        merged_cache = os.path.join(cache_dir, "merged.ply")
-        if os.path.exists(merged_cache):
-            print(f"  Loading from cache: {cache_dir}")
-            bone_meshes = {}
-            for bn in BONE_NAMES:
-                bp = os.path.join(cache_dir, f"{bn}.ply")
-                if os.path.exists(bp):
-                    bone_meshes[bn] = trimesh.load(bp, process=False)
-            merged = trimesh.load(merged_cache, process=False)
-            bone_meshes["merged"] = merged
-            results[subj] = bone_meshes
-            continue
+        # Cache disabled — always recompute
 
         # Look up v1 data
         if subj not in v2_to_v1:
@@ -322,13 +310,625 @@ def generate_specialist_meshes(args, subject_paths):
 
         if mesh_list:
             merged = trimesh.util.concatenate(mesh_list)
-            merged.export(merged_cache)
+            merged.export(os.path.join(cache_dir, "merged.ply"))
             bone_meshes_v2["merged"] = merged
             print(f"  Merged: {len(merged.vertices)} verts")
 
         results[subj] = bone_meshes_v2
 
     return results
+
+
+# ============================================================================
+# Specialist classification accuracy
+# ============================================================================
+
+def evaluate_specialist(args, subject_paths):
+    """Evaluate bone classification accuracy of the specialist on GT point clouds.
+
+    For each test subject:
+    1. Procrustes-align v2 SMPL -> v1 SMPL
+    2. Transform GT bone point clouds from v2 posed space to v1 posed space
+    3. Query the specialist to classify each GT point
+    4. Report per-bone and overall accuracy
+    """
+    import hit.hit_config as cg
+    from hit.model.deformer import skinning
+    from hit.model.mysmpl import MySmpl
+    from hit.utils.model import HitLoader
+    from hit.utils.smpl_utils import get_skinning_weights
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    # Load models
+    print("Loading standard HIT model...")
+    hl = HitLoader.load_from_path(args.hit_path, args.hit_ckpt)
+    hl.load()
+    hit_model = hl.hit_model
+
+    print(f"Loading specialist model ({args.specialist_exp})...")
+    specialist_loader = HitLoader.from_expname(args.specialist_exp, ckpt_choice=args.ckpt_choice)
+    specialist_loader.load()
+    specialist = specialist_loader.hit_model
+
+    specialist_labels = list(specialist.train_cfg.mri_labels)
+    print(f"Specialist labels: {specialist_labels}")
+
+    # Load v1 lookup and mapping
+    with open(V1_LOOKUP_PATH, "rb") as f:
+        v1_lookup = pickle.load(f)
+    v2_to_v1 = build_v2_to_v1_mapping()
+
+    smpl_gender = args.gender if args.gender != "both" else "male"
+    smpl_tool = MySmpl(model_path=cg.smplx_models_path, gender=smpl_gender).to(device)
+
+    all_results = []
+    batch_size = 50000
+
+    for gender, subj, subj_path in subject_paths:
+        print(f"\n--- {subj} ({gender}) ---")
+
+        if subj not in v2_to_v1:
+            print("  SKIP: no v2->v1 mapping")
+            continue
+        v1_key = v2_to_v1[subj]
+        if v1_key not in v1_lookup:
+            print(f"  SKIP: {v1_key} not in v1 lookup")
+            continue
+        v1_data = v1_lookup[v1_key]
+
+        # Load v2 SMPL, compute Procrustes (v2 -> v1)
+        pkl_path = os.path.join(subj_path, "mri_smpl.pkl")
+        with open(pkl_path, "rb") as f:
+            v2_raw = pickle.load(f)
+
+        v2_body_pose = v2_raw["pose"]
+        if v2_body_pose.shape[0] == 63:
+            v2_body_pose = np.concatenate([v2_body_pose, np.zeros(6, dtype=np.float32)])
+
+        with torch.no_grad():
+            v2_smpl_out = smpl_tool(
+                betas=torch.tensor(v2_raw["betas"][:10]).unsqueeze(0).float().to(device),
+                body_pose=torch.tensor(v2_body_pose).unsqueeze(0).float().to(device),
+                global_orient=torch.tensor(v2_raw["global_rot"]).unsqueeze(0).float().to(device),
+                transl=torch.tensor(v2_raw["trans"]).unsqueeze(0).float().to(device),
+            )
+        v2_verts = v2_smpl_out.vertices[0].cpu().numpy()
+        v1_verts = v1_data["body_verts"].numpy()
+        R, t = procrustes_align(v2_verts, v1_verts)
+
+        # v1 posed SMPL output (for skinning weights & unposing)
+        v1_betas = v1_data["betas"][:10].unsqueeze(0).float().to(device)
+        v1_body_pose = v1_data["body_pose"].unsqueeze(0).float().to(device)
+        v1_global_orient = v1_data["global_orient"].unsqueeze(0).float().to(device)
+        v1_transl = v1_data["transl"].unsqueeze(0).float().to(device)
+
+        with torch.no_grad():
+            smpl_output_posed = specialist.smpl.forward(
+                betas=v1_betas,
+                body_pose=v1_body_pose,
+                global_orient=v1_global_orient,
+                transl=v1_transl,
+            )
+            smpl_output_xpose = specialist.smpl.forward(
+                betas=v1_betas,
+                body_pose=specialist.smpl.x_cano().to(device),
+                global_orient=None,
+                transl=None,
+            )
+        posed_verts = smpl_output_posed.vertices[0].cpu().numpy()
+        xpose_verts = smpl_output_xpose.vertices[0].cpu().numpy()
+
+        # Load GT bone point clouds, transform to v1 posed space
+        gt_dir = os.path.join(subj_path, "per_part_pc")
+        all_points = []
+        all_labels = []
+
+        for bone_file, bone_name in zip(BONE_FILES, BONE_NAMES):
+            gt_path = os.path.join(gt_dir, bone_file)
+            if not os.path.exists(gt_path):
+                continue
+            if bone_name not in specialist_labels:
+                continue
+            label_idx = specialist_labels.index(bone_name)
+
+            gt_pc = trimesh.load(gt_path)
+            pts_v2 = np.array(gt_pc.vertices)
+            # v2 posed -> v1 posed: v1_pts = R @ v2_pts + t
+            pts_v1_posed = (R @ pts_v2.T).T + t
+
+            all_points.append(pts_v1_posed)
+            all_labels.append(np.full(len(pts_v1_posed), label_idx, dtype=np.int64))
+
+        if not all_points:
+            print("  SKIP: no GT bone point clouds found")
+            continue
+
+        all_points = np.concatenate(all_points, axis=0).astype(np.float32)
+        all_labels = np.concatenate(all_labels, axis=0)
+        n_points = len(all_points)
+        print(f"  {n_points} GT points across {len(set(all_labels))} bones")
+
+        # Two-step LBS to transform GT points: v1 posed -> rest -> X-pose
+        # Step 1: inverse-skin with posed tfs (posed -> rest)
+        # Step 2: forward-skin with X-pose tfs (rest -> X-pose)
+        # Then query specialist in X-pose space (matching forward_rigged_bones).
+        points_torch = torch.FloatTensor(all_points).unsqueeze(0).to(device)
+        all_preds = []
+
+        posed_tfs = smpl_output_posed.tfs   # [1, J, 4, 4]
+        xpose_tfs = smpl_output_xpose.tfs   # [1, J, 4, 4]
+
+        with torch.no_grad():
+            # Step 1: posed -> rest (inverse LBS with posed bone transforms)
+            sw_posed, _ = get_skinning_weights(all_points, posed_verts, specialist.smpl)
+            sw_posed = torch.FloatTensor(sw_posed).to(device)  # [N, J]
+            tfs_posed_exp = posed_tfs[0].unsqueeze(0).expand(n_points, -1, -1, -1)
+            pts_rest = skinning(points_torch[0], sw_posed, tfs_posed_exp, inverse=True)
+
+            # Step 2: rest -> X-pose (forward LBS with X-pose bone transforms)
+            # Re-compute skinning weights relative to rest-pose SMPL for accuracy
+            smpl_output_rest = specialist.smpl.forward(
+                betas=v1_betas,
+                body_pose=torch.zeros_like(v1_body_pose),
+                global_orient=None,
+                transl=None,
+            )
+            rest_verts = smpl_output_rest.vertices[0].cpu().numpy()
+            sw_rest, _ = get_skinning_weights(pts_rest.cpu().numpy(), rest_verts, specialist.smpl)
+            sw_rest = torch.FloatTensor(sw_rest).to(device)  # [N, J]
+            tfs_xpose_exp = xpose_tfs[0].unsqueeze(0).expand(n_points, -1, -1, -1)
+            pts_xpose = skinning(pts_rest, sw_rest, tfs_xpose_exp, inverse=False)
+            pts_xpose = pts_xpose.unsqueeze(0)  # [1, N, 3]
+
+        print(f"  Transformed {n_points} GT points: posed -> rest -> X-pose")
+
+        # Query specialist in X-pose space (same as forward_rigged_bones Stage 2)
+        with torch.no_grad():
+            for i in range(0, n_points, batch_size):
+                pts_batch = pts_xpose[:, i:i + batch_size]
+                pts_np = pts_batch[0].cpu().numpy()
+
+                sw_xpose, part_id = get_skinning_weights(
+                    pts_np, xpose_verts, specialist.smpl
+                )
+                sw_xpose = torch.FloatTensor(sw_xpose).unsqueeze(0).to(device)
+
+                output = specialist.query(
+                    pts_batch, smpl_output_xpose,
+                    eval_mode=True, unposed=True,
+                    part_id=part_id, skinning_weights=sw_xpose,
+                )
+
+                pred_occ = output['pred_occ']  # [1, N, num_classes]
+                probs = torch.softmax(pred_occ, dim=-1)
+                preds = torch.argmax(probs, dim=-1)[0].cpu().numpy()
+                all_preds.append(preds)
+
+                # Debug: print mean probabilities for first batch
+                if i == 0:
+                    mean_probs = probs[0].mean(dim=0).cpu().numpy()
+                    print("  Mean softmax probs (first batch): "
+                          + ", ".join(f"{bn}: {p:.3f}" for bn, p in zip(specialist_labels, mean_probs)))
+
+        all_preds = np.concatenate(all_preds, axis=0)
+
+        # Visualise X-pose points coloured by prediction vs GT
+        # import matplotlib.pyplot as plt
+        # from matplotlib.lines import Line2D
+
+        # bone_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple']
+        # pts_np_xpose = pts_xpose[0].cpu().numpy()
+
+        # fig, axes = plt.subplots(1, 2, figsize=(16, 7), subplot_kw={'projection': '3d'})
+
+        # for ax, labels_arr, title in zip(axes, [all_labels, all_preds], ['GT labels', 'Predicted']):
+        #     for label_idx, bone_name in enumerate(specialist_labels):
+        #         mask = labels_arr == label_idx
+        #         if mask.sum() == 0:
+        #             continue
+        #         ax.scatter(
+        #             pts_np_xpose[mask, 0], pts_np_xpose[mask, 1], pts_np_xpose[mask, 2],
+        #             s=0.5, c=bone_colors[label_idx % len(bone_colors)], alpha=0.4,
+        #             label=bone_name,
+        #         )
+        #     ax.set_title(f'{title} — {subj}')
+        #     ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+
+        # legend_handles = [
+        #     Line2D([0], [0], marker='o', color='w',
+        #            markerfacecolor=bone_colors[i % len(bone_colors)], markersize=8,
+        #            label=bn)
+        #     for i, bn in enumerate(specialist_labels)
+        # ]
+        # fig.legend(handles=legend_handles, loc='lower center', ncol=len(specialist_labels))
+        # plt.tight_layout(rect=[0, 0.06, 1, 1])
+        # plt.savefig(f"bone_classification_{subj}.png", dpi=150)
+        # print(f"  Saved bone_classification_{subj}.png")
+        # plt.close(fig)
+
+        # Accuracy
+        correct = (all_preds == all_labels).sum()
+        accuracy = correct / len(all_labels) * 100
+
+        per_bone_acc = {}
+        for label_idx, bone_name in enumerate(specialist_labels):
+            mask = all_labels == label_idx
+            if mask.sum() == 0:
+                per_bone_acc[bone_name] = np.nan
+                continue
+            per_bone_acc[bone_name] = float((all_preds[mask] == label_idx).sum() / mask.sum() * 100)
+
+        print(f"  Overall accuracy: {accuracy:.1f}%")
+        for bn, acc in per_bone_acc.items():
+            print(f"    {bn}: {acc:.1f}%")
+
+        all_results.append({
+            "subject": subj, "gender": gender,
+            "n_points": n_points, "accuracy": float(accuracy),
+            "per_bone": per_bone_acc,
+        })
+
+    # Summary
+    print(f"\n{'=' * 80}")
+    print("  CLASSIFICATION ACCURACY SUMMARY")
+    print(f"{'=' * 80}")
+    header = f"{'Subject':<25} | {'N pts':>7} | {'Overall':>7} | "
+    header += " | ".join(f"{bn[:8]:>8}" for bn in specialist_labels) + "  (%)"
+    print(header)
+    print("-" * 80)
+    for r in all_results:
+        bone_strs = " | ".join(
+            f"{r['per_bone'].get(bn, np.nan):8.1f}" for bn in specialist_labels
+        )
+        print(f"{r['subject']:<25} | {r['n_points']:>7} | {r['accuracy']:>6.1f}% | {bone_strs}")
+
+    if all_results:
+        mean_acc = np.mean([r["accuracy"] for r in all_results])
+        per_bone_means = {}
+        for bn in specialist_labels:
+            vals = [r["per_bone"][bn] for r in all_results if not np.isnan(r["per_bone"].get(bn, np.nan))]
+            per_bone_means[bn] = np.mean(vals) if vals else np.nan
+        bone_strs = " | ".join(f"{per_bone_means[bn]:8.1f}" for bn in specialist_labels)
+        print("-" * 80)
+        print(f"{'Mean':<25} | {'':>7} | {mean_acc:>6.1f}% | {bone_strs}")
+
+    return all_results
+
+
+# ============================================================================
+# Full HIT + Specialist pipeline (matching forward_rigged_bones)
+# ============================================================================
+
+def full_hit_specialist_pipeline(args, subject_paths):
+    """Evaluate bone classification using the full two-stage pipeline.
+
+    For each test subject:
+    1. Procrustes v2 -> v1, then two-step LBS to get GT points into v1 X-pose
+    2. Query standard HIT on X-pose points to identify bone tissue (BONE = class 3)
+    3. Feed only BT points to the specialist for bone-type classification
+    4. Compare specialist predictions to GT labels, report accuracy
+    """
+    import hit.hit_config as cg
+    from hit.model.deformer import skinning
+    from hit.model.mysmpl import MySmpl
+    from hit.utils.model import HitLoader
+    from hit.utils.smpl_utils import get_skinning_weights
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    # Load models
+    print("Loading standard HIT model...")
+    hl = HitLoader.load_from_path(args.hit_path, args.hit_ckpt)
+    hl.load()
+    hit_model = hl.hit_model
+
+    print(f"Loading specialist model ({args.specialist_exp})...")
+    specialist_loader = HitLoader.from_expname(args.specialist_exp, ckpt_choice=args.ckpt_choice)
+    specialist_loader.load()
+    specialist = specialist_loader.hit_model
+
+    specialist_labels = list(specialist.train_cfg.mri_labels)
+    print(f"Specialist labels: {specialist_labels}")
+
+    # Load v1 lookup and mapping
+    with open(V1_LOOKUP_PATH, "rb") as f:
+        v1_lookup = pickle.load(f)
+    v2_to_v1 = build_v2_to_v1_mapping()
+
+    smpl_gender = args.gender if args.gender != "both" else "male"
+    smpl_tool = MySmpl(model_path=cg.smplx_models_path, gender=smpl_gender).to(device)
+
+    all_results = []
+    batch_size = 50000
+
+    for gender, subj, subj_path in subject_paths:
+        print(f"\n--- {subj} ({gender}) ---")
+
+        if subj not in v2_to_v1:
+            print("  SKIP: no v2->v1 mapping")
+            continue
+        v1_key = v2_to_v1[subj]
+        if v1_key not in v1_lookup:
+            print(f"  SKIP: {v1_key} not in v1 lookup")
+            continue
+        v1_data = v1_lookup[v1_key]
+
+        # ---- Procrustes v2 -> v1 ----
+        pkl_path = os.path.join(subj_path, "mri_smpl.pkl")
+        with open(pkl_path, "rb") as f:
+            v2_raw = pickle.load(f)
+
+        v2_body_pose = v2_raw["pose"]
+        if v2_body_pose.shape[0] == 63:
+            v2_body_pose = np.concatenate([v2_body_pose, np.zeros(6, dtype=np.float32)])
+
+        with torch.no_grad():
+            v2_smpl_out = smpl_tool(
+                betas=torch.tensor(v2_raw["betas"][:10]).unsqueeze(0).float().to(device),
+                body_pose=torch.tensor(v2_body_pose).unsqueeze(0).float().to(device),
+                global_orient=torch.tensor(v2_raw["global_rot"]).unsqueeze(0).float().to(device),
+                transl=torch.tensor(v2_raw["trans"]).unsqueeze(0).float().to(device),
+            )
+        v2_verts = v2_smpl_out.vertices[0].cpu().numpy()
+        v1_verts = v1_data["body_verts"].numpy()
+        R, t = procrustes_align(v2_verts, v1_verts)
+
+        # ---- SMPL outputs ----
+        v1_betas = v1_data["betas"][:10].unsqueeze(0).float().to(device)
+        v1_body_pose = v1_data["body_pose"].unsqueeze(0).float().to(device)
+        v1_global_orient = v1_data["global_orient"].unsqueeze(0).float().to(device)
+        v1_transl = v1_data["transl"].unsqueeze(0).float().to(device)
+
+        with torch.no_grad():
+            smpl_output_posed = hit_model.smpl.forward(
+                betas=v1_betas,
+                body_pose=v1_body_pose,
+                global_orient=v1_global_orient,
+                transl=v1_transl,
+            )
+            smpl_output_xpose = hit_model.smpl.forward(
+                betas=v1_betas,
+                body_pose=hit_model.smpl.x_cano().to(device),
+                global_orient=None,
+                transl=None,
+            )
+            smpl_output_rest = hit_model.smpl.forward(
+                betas=v1_betas,
+                body_pose=torch.zeros_like(v1_body_pose),
+                global_orient=None,
+                transl=None,
+            )
+        posed_verts = smpl_output_posed.vertices[0].cpu().numpy()
+        xpose_verts = smpl_output_xpose.vertices[0].cpu().numpy()
+        rest_verts = smpl_output_rest.vertices[0].cpu().numpy()
+
+        # ---- Load GT bone point clouds, transform v2 posed -> v1 posed ----
+        gt_dir = os.path.join(subj_path, "per_part_pc")
+        all_points = []
+        all_labels = []
+
+        for bone_file, bone_name in zip(BONE_FILES, BONE_NAMES):
+            gt_path = os.path.join(gt_dir, bone_file)
+            if not os.path.exists(gt_path):
+                continue
+            if bone_name not in specialist_labels:
+                continue
+            label_idx = specialist_labels.index(bone_name)
+
+            gt_pc = trimesh.load(gt_path)
+            pts_v2 = np.array(gt_pc.vertices)
+            pts_v1_posed = (R @ pts_v2.T).T + t
+
+            all_points.append(pts_v1_posed)
+            all_labels.append(np.full(len(pts_v1_posed), label_idx, dtype=np.int64))
+
+        if not all_points:
+            print("  SKIP: no GT bone point clouds found")
+            continue
+
+        all_points = np.concatenate(all_points, axis=0).astype(np.float32)
+        all_labels = np.concatenate(all_labels, axis=0)
+        n_points = len(all_points)
+        print(f"  {n_points} GT points across {len(set(all_labels))} bones")
+
+        # ---- Two-step LBS: v1 posed -> rest -> X-pose ----
+        points_torch = torch.FloatTensor(all_points).unsqueeze(0).to(device)
+        posed_tfs = smpl_output_posed.tfs
+        xpose_tfs = smpl_output_xpose.tfs
+
+        with torch.no_grad():
+            # Step 1: posed -> rest
+            sw_posed, _ = get_skinning_weights(all_points, posed_verts, hit_model.smpl)
+            sw_posed = torch.FloatTensor(sw_posed).to(device)
+            tfs_posed_exp = posed_tfs[0].unsqueeze(0).expand(n_points, -1, -1, -1)
+            pts_rest = skinning(points_torch[0], sw_posed, tfs_posed_exp, inverse=True)
+
+            # Step 2: rest -> X-pose
+            sw_rest, _ = get_skinning_weights(pts_rest.cpu().numpy(), rest_verts, hit_model.smpl)
+            sw_rest = torch.FloatTensor(sw_rest).to(device)
+            tfs_xpose_exp = xpose_tfs[0].unsqueeze(0).expand(n_points, -1, -1, -1)
+            pts_xpose = skinning(pts_rest, sw_rest, tfs_xpose_exp, inverse=False)
+            pts_xpose = pts_xpose.unsqueeze(0)  # [1, N, 3]
+
+        print(f"  Transformed {n_points} GT points: posed -> rest -> X-pose")
+
+        # ---- Stage 1: Query standard HIT to identify bone tissue ----
+        print("  Stage 1: Querying HIT for bone tissue classification...")
+        bt_mask = np.zeros(n_points, dtype=bool)
+
+        with torch.no_grad():
+            for i in range(0, n_points, batch_size):
+                pts_batch = pts_xpose[:, i:i + batch_size]
+                pts_np = pts_batch[0].cpu().numpy()
+                batch_len = len(pts_np)
+
+                sw, part_id = get_skinning_weights(pts_np, xpose_verts, hit_model.smpl)
+                sw = torch.FloatTensor(sw).unsqueeze(0).to(device)
+
+                output = hit_model.query(
+                    pts_batch, smpl_output_xpose,
+                    eval_mode=True, unposed=True,
+                    part_id=part_id, skinning_weights=sw,
+                )
+
+                pred_occ = output['pred_occ']  # [1, N, 4] for [NO, LT, AT, BONE]
+                probs = torch.softmax(pred_occ, dim=-1)
+                predicted_class = torch.argmax(probs, dim=-1)[0].cpu().numpy()
+                bt_mask[i:i + batch_len] = (predicted_class == 3)  # BONE = index 3
+
+        n_bt = bt_mask.sum()
+        print(f"  HIT classified {n_bt}/{n_points} points as bone tissue ({n_bt/n_points*100:.1f}%)")
+
+        if n_bt == 0:
+            print("  SKIP: no bone tissue points found by HIT")
+            continue
+
+        # ---- Stage 2: Query specialist only on BT points ----
+        print("  Stage 2: Querying specialist on bone tissue points...")
+        pts_bt = pts_xpose[:, bt_mask]  # [1, N_bt, 3]
+        labels_bt = all_labels[bt_mask]
+        n_bt_pts = int(n_bt)
+
+        all_preds_bt = []
+        with torch.no_grad():
+            for i in range(0, n_bt_pts, batch_size):
+                pts_batch = pts_bt[:, i:i + batch_size]
+                pts_np = pts_batch[0].cpu().numpy()
+
+                sw, part_id = get_skinning_weights(pts_np, xpose_verts, specialist.smpl)
+                sw = torch.FloatTensor(sw).unsqueeze(0).to(device)
+
+                output = specialist.query(
+                    pts_batch, smpl_output_xpose,
+                    eval_mode=True, unposed=True,
+                    part_id=part_id, skinning_weights=sw,
+                )
+
+                pred_occ = output['pred_occ']  # [1, N, num_classes]
+                probs = torch.softmax(pred_occ, dim=-1)
+                preds = torch.argmax(probs, dim=-1)[0].cpu().numpy()
+                all_preds_bt.append(preds)
+                
+                
+                # ######
+                # import matplotlib.pyplot as plt
+                # from matplotlib.lines import Line2D
+                # bone_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple']
+                # pts_bt_np = pts_bt[0].cpu().numpy()  # shape [N, 3]
+                # fig, ax = plt.subplots(figsize=(7, 6))
+                # for label_idx, bone_name in enumerate(specialist_labels):
+                #     mask = preds == label_idx
+                #     if mask.sum() == 0:
+                #         continue
+                #     ax.scatter(
+                #         pts_bt_np[mask, 0], pts_bt_np[mask, 1],
+                #         s=1, c=bone_colors[label_idx % len(bone_colors)], alpha=0.6, label=bone_name
+                #     )
+                # ax.set_title(f'Bone Class Predictions (Front View - {subj})')
+                # ax.set_xlabel('X')
+                # ax.set_ylabel('Y')
+                # legend_handles = [
+                #     Line2D([0], [0], marker='o', color='w',
+                #            markerfacecolor=bone_colors[i % len(bone_colors)], markersize=8,
+                #            label=bn)
+                #     for i, bn in enumerate(specialist_labels)
+                # ]
+                # ax.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=len(specialist_labels))
+                # plt.tight_layout()
+                # plt.show()
+                # #from IPython import embed; embed(); exit()
+                
+                # ##### Ground truth point cloud Transfomation here: 
+                # import matplotlib.pyplot as plt
+                # from matplotlib.lines import Line2D
+                # bone_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple']
+                # pts_gt_xpose = pts_xpose[0].cpu().numpy()  # shape [N, 3]
+                # fig, ax = plt.subplots(figsize=(7, 6))
+                # for label_idx, bone_name in enumerate(specialist_labels):
+                #     mask = all_labels == label_idx
+                #     if mask.sum() == 0:
+                #         continue
+                #     ax.scatter(
+                #         pts_gt_xpose[mask, 0], pts_gt_xpose[mask, 1],
+                #         s=1, c=bone_colors[label_idx % len(bone_colors)], alpha=0.6, label=bone_name
+                #     )
+                # ax.set_title('GT Bone Groups (X-pose)')
+                # ax.set_xlabel('X')
+                # ax.set_ylabel('Y')
+                # legend_handles = [
+                #     Line2D([0], [0], marker='o', color='w',
+                #         markerfacecolor=bone_colors[i % len(bone_colors)], markersize=8,
+                #         label=bn)
+                #     for i, bn in enumerate(specialist_labels)
+                # ]
+                # ax.legend(handles=legend_handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=len(specialist_labels))
+                # plt.tight_layout()
+                # plt.show()
+                # exit()
+                # ######
+                if i == 0:
+                    mean_probs = probs[0].mean(dim=0).cpu().numpy()
+                    print("  Mean softmax probs (BT points, first batch): "
+                          + ", ".join(f"{bn}: {p:.3f}" for bn, p in zip(specialist_labels, mean_probs)))
+
+        all_preds_bt = np.concatenate(all_preds_bt, axis=0)
+
+        # ---- Accuracy (on BT points only) ----
+        correct = (all_preds_bt == labels_bt).sum()
+        accuracy = correct / len(labels_bt) * 100
+
+        per_bone_acc = {}
+        for label_idx, bone_name in enumerate(specialist_labels):
+            mask = labels_bt == label_idx
+            if mask.sum() == 0:
+                per_bone_acc[bone_name] = np.nan
+                continue
+            per_bone_acc[bone_name] = float((all_preds_bt[mask] == label_idx).sum() / mask.sum() * 100)
+
+        # Also report how many GT points HIT missed (not classified as bone)
+        n_missed = n_points - n_bt
+        hit_recall = n_bt / n_points * 100
+
+        print(f"  HIT bone recall: {hit_recall:.1f}% ({n_bt}/{n_points})")
+        print(f"  Specialist accuracy (on BT points): {accuracy:.1f}%")
+        for bn, acc in per_bone_acc.items():
+            print(f"    {bn}: {acc:.1f}%")
+
+        all_results.append({
+            "subject": subj, "gender": gender,
+            "n_points": n_points, "n_bt": n_bt,
+            "hit_bone_recall": float(hit_recall),
+            "accuracy": float(accuracy),
+            "per_bone": per_bone_acc,
+        })
+
+    # ---- Summary ----
+    print(f"\n{'=' * 90}")
+    print("  FULL PIPELINE CLASSIFICATION (HIT BT filter -> Specialist)")
+    print(f"{'=' * 90}")
+    header = (f"{'Subject':<25} | {'HIT BT%':>7} | {'Acc':>6} | "
+              + " | ".join(f"{bn[:8]:>8}" for bn in specialist_labels) + "  (%)")
+    print(header)
+    print("-" * 90)
+    for r in all_results:
+        bone_strs = " | ".join(
+            f"{r['per_bone'].get(bn, np.nan):8.1f}" for bn in specialist_labels
+        )
+        print(f"{r['subject']:<25} | {r['hit_bone_recall']:>6.1f}% | {r['accuracy']:>5.1f}% | {bone_strs}")
+
+    if all_results:
+        mean_acc = np.mean([r["accuracy"] for r in all_results])
+        mean_recall = np.mean([r["hit_bone_recall"] for r in all_results])
+        per_bone_means = {}
+        for bn in specialist_labels:
+            vals = [r["per_bone"][bn] for r in all_results if not np.isnan(r["per_bone"].get(bn, np.nan))]
+            per_bone_means[bn] = np.mean(vals) if vals else np.nan
+        bone_strs = " | ".join(f"{per_bone_means[bn]:8.1f}" for bn in specialist_labels)
+        print("-" * 90)
+        print(f"{'Mean':<25} | {mean_recall:>6.1f}% | {mean_acc:>5.1f}% | {bone_strs}")
+
+    return all_results
 
 
 # ============================================================================
@@ -390,6 +990,10 @@ def main():
     parser.add_argument("--skip_specialist", action="store_true",
                         help="Skip specialist evaluation (baselines only)")
     parser.add_argument("--gender", type=str, default="both", choices=["male", "female", "both"])
+    parser.add_argument("--eval_classification", action="store_true",
+                        help="Run specialist classification accuracy on GT point clouds and exit")
+    parser.add_argument("--eval_full_pipeline", action="store_true",
+                        help="Run full HIT+specialist pipeline classification and exit")
     args = parser.parse_args()
 
     # Collect subject paths
@@ -405,6 +1009,14 @@ def main():
                 subject_paths.append((gender, subj, subj_path))
 
     print(f"Found {len(subject_paths)} test subjects\n")
+
+    # ---- Classification accuracy (early exit) ----
+    if args.eval_full_pipeline:
+        full_hit_specialist_pipeline(args, subject_paths)
+        return
+    if args.eval_classification:
+        evaluate_specialist(args, subject_paths)
+        return
 
     # ---- Generate specialist meshes (if not skipped) ----
     specialist_meshes = {}  # subj -> {bone_name: mesh, 'merged': mesh}
