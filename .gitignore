@@ -140,7 +140,6 @@ learning/README.md
 external/
 hit_venv/
 learning/hit/hit_ps019.code-workspace
-output/
 wandb/
 # PyBuilder
 target/
@@ -210,7 +209,6 @@ dataset_processing/figures/
 learning/README.md
 external/
 hit_venv/
-output/
 wandb/
 pretrained/
 hit/external/
@@ -220,3 +218,4 @@ mri_bones_release_v2/
 body_models/
 hit_dataset_v1.0.zip
 hit_dataset_v1.0/
+#output/
