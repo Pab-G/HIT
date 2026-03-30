@@ -1,16 +1,5 @@
-"""
-Extract lightweight SMPL params + body_verts from the large v1 repackaged PKL files.
-Creates a single lookup file: v1_smpl_lookup.pkl
-
-This avoids loading 28GB+ PKL files during training.
-
-Usage:
-    python extract_v1_smpl_lookup.py
-"""
-
 import os
 import pickle
-import sys
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 REPACKAGED_DIR = os.path.join(BASE, "hit_dataset_v1.0", "repackaged")
