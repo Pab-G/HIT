@@ -1202,7 +1202,7 @@ def main(cfg):
 
         exppath = Exppath(cfg.exp_name)
         #ckpt_path = exppath.get_best_checkpoint()
-        ckpt_path = "/home/yulong/pvbg-thesis/HIT/pretrained/OpusMale_4/ckpts/last.ckpt"
+        ckpt_path = "/home/yulong/pvbg-thesis/HIT/pretrained/NewBranch/ckpts/last.ckpt"
         # ckpt_path = checkpoint_callback.best_model_path # this is not working for some reason
     elif os.path.exists(
         os.path.join(

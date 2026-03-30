@@ -982,7 +982,7 @@ def main():
                         help="Path to standard HIT checkpoint directory")
     parser.add_argument("--hit_ckpt", type=str, default="male_hit.ckpt",
                         help="Checkpoint filename for standard HIT")
-    parser.add_argument("--specialist_exp", type=str, default="OpusMale_4",
+    parser.add_argument("--specialist_exp", type=str, default="NewBranch",
                         help="Specialist experiment name")
     parser.add_argument("--ckpt_choice", type=str, default="best", choices=["best", "last"])
     parser.add_argument("--output_dir", type=str, default="output/bone_eval",

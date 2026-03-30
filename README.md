@@ -45,6 +45,44 @@ PYTHONPATH=. python demos/infer_smpl.py --exp_name=OPUS_2 --to_infer smpl_templa
 
 3. Install our checkpoint from [PabsDa/HIT-Bone-Specialist](https://huggingface.co/PabsDa/HIT-Bone-Specialist/tree/main)
 
+# Structure
+
+```
+HIT/
+├── hit/                          # Core Python package
+│   ├── configs/                  # Hydra configs (training, network architecture)
+│   ├── model/                    # Model implementations
+│   │   ├── hit_model.py          
+│   │   ├── network.py            
+│   │   ├── deformer.py           
+│   │   ├── mysmpl.py             
+│   │   ├── generator.py          
+│   │   └── broyden.py            
+│   ├── training/                 # Training loop, losses, metrics, dataloaders
+│   ├── utils/                    # Rendering, slicing, SMPL utilities, figures
+│   ├── smpl/smplx/               # SMPL-X body model code (LBS, vertex ops)
+│   ├── external/leap/            # LEAP body model integration
+│   └── assets/                   # Vertex-to-part mapping (v2p.pkl)
+│
+├── demos/                        # Inference, data loading & evaluation
+│   ├── infer_smpl.py             #   Infer tissues from SMPL parameters
+│   ├── load_data.py              #   Data loading example
+│   └── eval_bone_distance.py     #   Our evaluation script 
+│
+├── body_models/                  # SMPL body models (male/female/neutral .pkl)
+├── mri_bones_release_v2/         # Point-cloud dataset (train/validation/test splits)
+├── hit_dataset_v1.0/             # Original HIT dataset
+├── pretrained/                   # Trained model checkpoints
+├── output/                       # Generated results & evaluations
+│
+├── requirements.txt
+├── setup.py
+├── extract_v1_smpl_lookup.py
+└── LICENSE.txt
+```
+
+
+
 # Usage:
 
 Demo: 
