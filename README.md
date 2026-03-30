@@ -85,7 +85,7 @@ HIT/
 │
 ├── requirements.txt
 ├── setup.py
-├── extract_v1_smpl_lookup.py
+├── extract_v1_smpl_lookup.py     #  Script to create the lookup table for v2p mapping
 └── LICENSE.txt
 ```
 

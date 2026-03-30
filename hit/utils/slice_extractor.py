@@ -221,8 +221,6 @@ class SliceLevelSet:
             specialist_palette, occ[0].cpu().numpy().astype(int), axis=0
         )
 
-        # 4. Reshape to RGB (3 channels) instead of RGBA (4 channels)
-        # Note: tissue_palette was likely 4 channels (RGBA), but we use 3 (RGB) here.
         values = color_values.reshape(self.xx.shape[0], self.xx.shape[1], 3)
         img = Image.fromarray(values.astype(np.uint8))
 
