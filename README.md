@@ -12,9 +12,10 @@ male     train_cfg.to_train=occ     wdboff=False overfit_style=posed
 ```
 
 #####
-
-PYTHONPATH=. python demos/infer*smpl.py --exp_name=SMALL --to_infer smpl_file --target_body /home/yulong/pvbg-thesis/HIT/mri_bones_release_v2/test/male/GKF_TSneu*/mri_smpl.pkl
-
+Male:
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=SMALL --to_infer smpl_file --target_body /home/yulong/pvbg-thesis/HIT/mri_bones_release_v2/test/male/GKF_TSneu*/mri_smpl.pkl
+Female:
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=SMALL --to_infer smpl_file --target_body /home/yulong/pvbg-thesis/HIT/mri_bones_release_v2/test/female/CR260152/mri_smpl.pkl
 #####
 
 ## Evaluate:
@@ -35,14 +36,25 @@ Try this one: Male:
 PYTHONPATH=. python demos/infer_smpl.py --exp_name=OPUS_2 --to_infer smpl_template --betas -1.1172, 0.2070
 ```
 
+
+# Installation 
+1. Follow HIT's installation instructions in the [HIT repository](https://github.com/MarilynKeller/HIT). Including the installation of their checkpoints and body models.
+
+
+2. Download the datasets from from [On predicting 3D bone locations inside the human body] (https://3dbones.is.tue.mpg.de/). 
+
+3. Install our checkpoint from [PabsDa/HIT-Bone-Specialist](https://huggingface.co/PabsDa/HIT-Bone-Specialist/tree/main)
+
+# Usage:
+
+Demo: 
+```shell
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_template --betas 0.4650 -0.0454
+```
+
+
+
 # Acknowledgments
-
-We thank the authors of the [COAP](https://github.com/markomih/COAP) and [gDNA](https://github.com/xuchen-ethz/gdna) for their codebase. HIT is built on top of these two projects.
-We also thank Soubhik Sanyal for his help on the project.
-
-# Citation
-
-If you use this code, please cite the following paper:
 
 ```
 @inproceedings{keller2024hit,
@@ -56,9 +68,4 @@ If you use this code, please cite the following paper:
 }
 ```
 
-## Contact
 
-For more questions, please contact hit@tue.mpg.de
-
-This code repository in the provided [License](LICENSE.txt).
-For the licensing of the retrained models and the dataset, please refer to the HIT project page [https://hit.is.tue.mpg.de/].
