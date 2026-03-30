@@ -39,7 +39,7 @@ def main():
     ckpt_choice = args.ckpt_choice
     device = torch.device(args.device)
     
-    out_folder = os.path.join(args.out_folder, f'{exp_name}_{ckpt_choice}')
+    out_folder = os.path.join(args.out_folder, f'{exp_name}')
     
     # Create a data dictionary containing the SMPL parameters 
     if args.to_infer == 'smpl_template':
@@ -89,7 +89,7 @@ def main():
                 data[key] = val.to(device)
                 
             # Create output folder
-            os.makedirs(out_folder, exist_ok=True)
+    os.makedirs(out_folder, exist_ok=True)
     
     # Load HIT model: (add your path here)
     hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_male", "male_hit.ckpt")

@@ -74,6 +74,14 @@ HIT/
 ├── hit_dataset_v1.0/             # Original HIT dataset
 ├── pretrained/                   # Trained model checkpoints
 ├── output/                       # Generated results & evaluations
+│   ├── female_CR260152/          # Demo results for female example
+│   │   ├── AT_mesh.obj  
+│   │   ├── ..
+│   │   └── Tibia_Fibula_mesh.obj
+│   └── male_GKF_TSneu/           # Demo results for male example
+│       ├── AT_mesh.obj
+│       ├── ..
+│       └── Tibia_Fibula_mesh.obj
 │
 ├── requirements.txt
 ├── setup.py
@@ -85,9 +93,24 @@ HIT/
 
 # Usage:
 
+# Training: 
+
+
+# Evaluation & Inference:
+Male:
+```shell
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_file --target_body <PATH_TO_SMPL>.pkl
+```
+Female:
+```shell
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_file --target_body <PATH_TO_SMPL>.pkl.pkl
+```
+
+or one can also: 
+
 Demo: 
 ```shell
-PYTHONPATH=. python demos/infer_smpl.py --exp_name=WHATEVER --to_infer smpl_template --betas 0.4650 -0.0454
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_template --betas 0.4650 -0.0454
 ```
 
 
