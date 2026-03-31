@@ -1049,9 +1049,8 @@ class HITTraining(pl.LightningModule):
         points = batch["mri_points"][0].detach().cpu().numpy()
         # Labels 0-4
         pred_labels = torch.argmax(pred_occ[0], dim=-1).detach().cpu().numpy()
-        print(f"Unique predicted labels: {np.unique(pred_labels)}")
+        
         gt_labels = batch["mri_occ"][0].detach().cpu().long().numpy() #- 3 # Shift labels to be 0-4 instead of 3-7
-        print(f"Unique GT labels: {np.unique(gt_labels)}")
         # 2. Define your specialist palette
         # Red: Femur, Green: Pelvis, Blue: Humerus, Yellow: Radius, Magenta: Tibia
         palette = np.array(
