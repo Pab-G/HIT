@@ -92,7 +92,7 @@ def main():
     os.makedirs(out_folder, exist_ok=True)
     
     # Load HIT model: (add your path here)
-    hl = HitLoader.load_from_path("/home/yulong/pvbg-thesis/HIT/pretrained/hit_male", "male_hit.ckpt")
+    hl = HitLoader.load_from_path("./pretrained/hit_male", "male_hit.ckpt")
     hl.load()
     hl.hit_model.apply_compression = True
 

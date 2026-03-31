@@ -4,7 +4,7 @@ package_directory = os.path.dirname(os.path.abspath(__file__))
 
 ################## To edit
 # Dataset
-packaged_data_folder = "/home/yulong/pvbg-thesis/HIT/body_models"
+packaged_data_folder = "./body_models"
 
 # Trained HIT models
 trained_models_folder = os.path.join(
@@ -21,11 +21,11 @@ pretrained_female_smpl = os.path.join(
 #    "../pretrained/hit_female/ckpts/model-epoch=1479-val_accuracy=0.708701.ckpt",
 # )
 
-smplx_models_path = "/home/yulong/pvbg-thesis/HIT/body_models"  # folder containing the smplx models, to download from https://smpl-x.is.tue.mpg.de/downloads
+smplx_models_path = "./body_models"  # folder containing the smplx models, to download from https://smpl-x.is.tue.mpg.de/downloads
 
 # Training logging
 wandb_entity = (
-    "pablo-vonbaum-technical-university-of-munich"  # wandb account or team to log to
+    ""  # wandb account or team to log to
 )
 wandb_project_name = "hit"  # wandb project to log to
 ##################

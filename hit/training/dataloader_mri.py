@@ -313,7 +313,7 @@ class MRIDataset(torch.utils.data.Dataset):
         gender = smpl_cfg["gender"]
 
         # 2. Path Discovery
-        base_dir = "/home/yulong/pvbg-thesis/HIT/mri_bones_release_v2"
+        base_dir = "./mri_bones_release_v2"
         paths = glob.glob(os.path.join(base_dir, split, gender, "*"))
         print(
             f"--- Found {len(paths)} subjects in {os.path.join(base_dir, split, gender)} ---"
@@ -325,8 +325,8 @@ class MRIDataset(torch.utils.data.Dataset):
             )
 
         # --- LOAD V1 SMPL LOOKUP + MAPPING ---
-        v1_lookup_path = "/home/yulong/pvbg-thesis/HIT/hit_dataset_v1.0/repackaged/v1_smpl_lookup.pkl"
-        mapping_json_path = "/home/yulong/pvbg-thesis/HIT/hit_dataset_v1.0/repackaged/mapping.json"
+        v1_lookup_path = "./hit_dataset_v1.0/repackaged/v1_smpl_lookup.pkl"
+        mapping_json_path = "./hit_dataset_v1.0/repackaged/mapping.json"
 
         print("--- Loading v1 SMPL lookup for Procrustes alignment ---")
         with open(v1_lookup_path, "rb") as f:
