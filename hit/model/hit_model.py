@@ -140,8 +140,6 @@ class HITModel(torch.nn.Module):
         - Points outside BT get value 0 (not bone)
         - Points inside BT get specialist's probability for each bone class
         """
-        from skimage import measure
-        
         smpl = self.smpl
         device = betas.device
         
@@ -212,23 +210,11 @@ class HITModel(torch.nn.Module):
         bt_points = grid_points[is_bt]
         
         print(f"  Found {len(bt_points)} points where BONE is the argmax class")
-        ########################
-        import matplotlib.pyplot as plt
-
-        # Visualize bone tissue points
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(bt_points[:, 0], bt_points[:, 1], bt_points[:, 2], s=1, c='red')
-        ax.set_title('Bone Tissue Points (Stage 1)')
-        plt.show()
-        ########################
         if len(bt_points) == 0:
             print("Warning: No bone tissue detected by standard model")
             return []
         
         # --- Stage 2: Query specialist only on BT points ---
-        # The specialist is trained with x-pose data and unposed=True.
-        # Points are already in x-pose space (from the grid around smpl_output_xpose).
         print("Stage 2: Querying specialist model on bone tissue points...")
 
         bt_points_torch = torch.FloatTensor(bt_points).unsqueeze(0).to(device)
@@ -257,50 +243,18 @@ class HITModel(torch.nn.Module):
                 all_probs.append(probs.cpu())
         
         all_probs = torch.cat(all_probs, dim=1).squeeze(0).numpy()  # [N_bt, num_classes]
-        
-        ###################################
-        # Color points by predicted bone class
-        bone_class_pred = np.argmax(all_probs, axis=1)  # [N_bt]
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        scatter = ax.scatter(bt_points[:, 0], bt_points[:, 1], bt_points[:, 2], s=1, c=bone_class_pred, cmap='tab10')
-        ax.set_title('Bone Class Predictions (Stage 2)')
-        plt.colorbar(scatter)
-        plt.show()
-        ###################################
         # --- Stage 3: Build occupancy grids and run marching cubes ---
         print("Stage 3: Extracting bone meshes with marching cubes...")
         
         bone_labels = specialist.train_cfg.mri_labels
         bone_meshes = {}  # name -> mesh
-        spacing = ((grid_max - grid_min) / (resolution - 1))
-
-        # Use all predicted points
-        #bone_assignment = np.argmax(all_probs, axis=1)  # [N_bt]
-        
-        # In case you want to do KNN: 
-        # KNN smoothing: replace each point's label with the majority among its neighbors
-        #from sklearn.neighbors import KDTree
-        #k = 7  # number of neighbors (odd to avoid ties)
-        #tree = KDTree(bt_points)
-        #_, neighbor_indices = tree.query(bt_points, k=k)  # [N_bt, k]
-        # Gather neighbor labels and take majority vote
-        # neighbor_labels = bone_assignment[neighbor_indices]  # [N_bt, k]
-        # from scipy.stats import mode
-        # smoothed_assignment, _ = mode(neighbor_labels, axis=1)
-        # bone_assignment = smoothed_assignment.squeeze()
-                
+        spacing = ((grid_max - grid_min) / (resolution - 1))                
         
         for bone_idx, bone_name in enumerate(bone_labels):
             print(f"  Processing {bone_name} (class {bone_idx})...")
 
             # Initialize grid with zeros
             occ_grid = np.zeros((resolution, resolution, resolution), dtype=np.float64)
-            
-            # If we want to use all predictions
-            #bone_mask = (bone_assignment == bone_idx).astype(np.float64)
-            #grid_indices = np.unravel_index(bt_indices, (resolution, resolution, resolution))
-            #occ_grid[grid_indices] = bone_mask
 
             # Fill in specialist probabilities for BT points
             bone_probs = all_probs[:, bone_idx]

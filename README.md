@@ -97,36 +97,42 @@ HIT/
 
 
 # Evaluation & Inference:
+## To extract mesh from a target SMPL:
 Male:
 ```shell
 PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_file --target_body <PATH_TO_SMPL>.pkl
 ```
 Female:
 ```shell
-PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_file --target_body <PATH_TO_SMPL>.pkl.pkl
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_file --target_body <PATH_TO_SMPL>.pkl
 ```
 
 or one can also: 
 
 Demo: 
 ```shell
-PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_template --betas 0.4650 -0.0454
+PYTHONPATH=. python demos/infer_smpl.py --exp_name=<EXP_NAME> --to_infer smpl_template --betas <b1> <b2>
 ```
 
 
+## To get numerical evaluation: 
+
+Specialist only evaluation: 
+```shell
+PYTHONPATH=. python demos/eval_bone_distance.py --specialist_exp <SPECIALIST>  --gender <GENDER>
+```
+
+HIT + Specialist evaluation: 
+```shell
+PYTHONPATH=. python demos/eval_bone_distance.py --specialist_exp <SPECIALIST>  --gender <GENDER> --eval_full_pipeline
+```
+
+Point to mesh distances: 
+```shell
+PYTHONPATH=. python demos/eval_bone_distance.py --specialist_exp <SPECIALIST> --gender <GENDER>
+```
 
 # Acknowledgments
-
-```
-@inproceedings{keller2024hit,
-  title = {{HIT}: Estimating Internal Human Implicit Tissues from the Body Surface},
-  author = {Keller, Marilyn and Arora, Vaibhav and Dakri, Abdelmouttaleb and Chandhok, Shivam and Machann, J{\"u}rgen and Fritsche, Andreas and Black, Michael J. and Pujades, Sergi},
-  booktitle = {IEEE/CVF Conf.~on Computer Vision and Pattern Recognition (CVPR)},
-  pages = {3480--3490},
-  month = jun,
-  year = {2024},
-  month_numeric = {6}
-}
-```
+This code is built on top of the original HIT codebase, which can be found at [MarilynKeller/HIT](https://github.com/MarilynKeller/HIT). We thank the original authors for their work and for making their code publicly available.
 
 

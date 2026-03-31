@@ -123,7 +123,7 @@ def main():
                                                                 global_orient=data['global_orient'], 
                                                                 transl=data['transl'],
                                                                 mise_resolution0=64)        
-        # Extract the mesh 
+ 
         extracted_meshes, _ = hl.hit_model.forward_rigged(data['betas'], 
                                                                 body_pose=data['body_pose'], 
                                                                 global_orient=data['global_orient'], 

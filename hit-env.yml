@@ -180,4 +180,4 @@ dependencies:
       - xxhash==3.6.0
       - yarl==1.22.0
       - zipp==3.19.2
-prefix: /home/yulong/miniconda3/envs/hit
+prefix: /YOUR-PATH
