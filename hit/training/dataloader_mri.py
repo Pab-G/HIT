@@ -2,13 +2,11 @@ import os
 import sys
 
 # 1. Remove the local directory from the path so it doesn't shadow 'logging'
-# This stops Python from picking up hit/training/logging.py instead of the real library
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir in sys.path:
     sys.path.remove(current_dir)
 
 # 2. Force the import of the real logging library
-# Re-add the directory if you need it for other local imports later
 sys.path.append(current_dir)
 
 import collections
@@ -219,6 +217,8 @@ def process_mri_values(mri_values: np.ndarray, normalize=False):
 
 
 class MRIDataset(torch.utils.data.Dataset):
+    # Main changes from the original dataloader:
+    
     @torch.no_grad()
     def __init__(self, smpl_cfg, data_cfg, train_cfg, smpl_data, split):
         super().__init__()
