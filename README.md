@@ -39,6 +39,12 @@ HIT/
 ├── body_models/                  # SMPL body models (male/female/neutral .pkl)
 ├── mri_bones_release_v2/         # Point-cloud dataset (train/validation/test splits)
 ├── hit_dataset_v1.0/             # Original HIT dataset
+│   └── repackaged/
+│   │   ├── female_train.pkl 
+│   │   ├── female_val.pkl
+│   │   ├── ..
+│   │   ├── mapping.json
+│       └── v1_smpl_lookup.py     # Either download from huggingface or run script to create
 ├── pretrained/                   # Trained model checkpoints
 │   ├── hit_male_ckpt/            # original HIT checkpoint male
 │   ├── hit_female_ckpt/          # original HIT checkpoint female
